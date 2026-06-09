@@ -82,7 +82,7 @@ def discover_team_urls(page) -> dict[str, str]:
         name = a.get_text(strip=True)
         if not name:
             continue
-        if re.match(r"^/en/squads/[a-f0-9]+/[\w%-]+-Stats$", href):
+        if re.match(r"^/en/squads/[a-f0-9]+/.+-Men-Stats$", href):
             if name not in team_urls:
                 team_urls[name] = BASE_URL + href
 
