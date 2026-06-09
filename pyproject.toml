@@ -10,9 +10,9 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "python-dotenv>=1.0",
     "requests>=2.31",
-    "cloudscraper>=1.2",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
+    "playwright>=1.44",
 ]
 
 [project.optional-dependencies]
