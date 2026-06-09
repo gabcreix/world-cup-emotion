@@ -15,8 +15,10 @@ import json
 import re
 from pathlib import Path
 
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
+
+_scraper = cloudscraper.create_scraper()
 
 # ---------------------------------------------------------------------------
 # Constantes
@@ -71,7 +73,7 @@ def _get(url: str) -> BeautifulSoup:
     else:
         print(f"  [fetch] {url}")
         time.sleep(REQUEST_DELAY)
-        r = requests.get(url, headers=HEADERS, timeout=30)
+        r = _scraper.get(url, headers=HEADERS, timeout=30)
         r.raise_for_status()
         html = r.text
         cache_path.write_text(html, encoding="utf-8")
