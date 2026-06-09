@@ -47,7 +47,7 @@ def _create_driver() -> uc.Chrome:
     options.add_argument("--lang=en-US")
     options.add_argument("--window-size=1280,900")
     # headless=False es necesario para Cloudflare Turnstile interactivo
-    driver = uc.Chrome(options=options, headless=False)
+    driver = uc.Chrome(options=options, headless=False, version_main=148)
     return driver
 
 
