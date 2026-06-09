@@ -37,13 +37,28 @@ REQUEST_DELAY = 5.0  # segundos entre requests
 # ---------------------------------------------------------------------------
 
 def _fetch_html(page, url: str) -> str:
-    """Navega a url y devuelve el HTML completo."""
-    page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-    # Esperar a que cargue la tabla principal
+    """
+    Navega a url y devuelve el HTML completo.
+    Espera hasta 30s a que Cloudflare resuelva el challenge
+    (desaparece el título "Just a moment...").
+    """
+    page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+
+    # Esperar a que el challenge de Cloudflare desaparezca
     try:
-        page.wait_for_selector("table", timeout=10_000)
+        page.wait_for_function(
+            "() => document.title !== 'Just a moment...'",
+            timeout=30_000,
+        )
     except PlaywrightTimeout:
-        pass  # continuar aunque no haya tabla visible
+        print(f"  [WARN] Cloudflare challenge no resolvió para {url}")
+
+    # Esperar tabla real o que cargue el contenido
+    try:
+        page.wait_for_selector("table", timeout=15_000)
+    except PlaywrightTimeout:
+        pass
+
     return page.content()
 
 
@@ -113,24 +128,23 @@ def fetch_squad_html(page, team_name: str, team_url: str) -> str:
     return _get_or_cache(page, team_url, cache_path)
 
 
-def fetch_all_squads(team_urls: dict[str, str]) -> None:
+def _launch_browser(p):
     """
-    Descarga HTMLs de todos los equipos usando una sola sesión de Playwright.
-    Los guarda en data/bronze/fbref_squads/squads/.
+    Lanza Chromium en modo visible para pasar el Cloudflare Turnstile.
+    FBref usa challenge interactivo — headless es detectado como bot.
+    El challenge se resuelve automáticamente en ~3s sin interacción del usuario.
     """
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        # User-agent de Chrome real
-        page.set_extra_http_headers({
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        })
-
-        for name, url in team_urls.items():
-            fetch_squad_html(page, name, url)
-
-        browser.close()
+    browser = p.chromium.launch(headless=False)
+    context = browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        locale="en-US",
+    )
+    page = context.new_page()
+    return browser, page
 
 
 # ---------------------------------------------------------------------------
@@ -138,15 +152,23 @@ def fetch_all_squads(team_urls: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 
 def run() -> dict[str, str]:
-    """Ejecuta la capa bronze completa. Devuelve el dict team_urls."""
+    """
+    Ejecuta la capa bronze completa. Devuelve el dict team_urls.
+    Se abre una ventana de Chrome — es intencional para pasar Cloudflare.
+    """
+    # Borrar cache del torneo si es de una ejecución anterior fallida
+    stale = BRONZE_DIR / "tournament_page.html"
+    if stale.exists():
+        content = stale.read_text(encoding="utf-8", errors="ignore")
+        if "challenge-platform" in content or "Just a moment" in content:
+            print("[INFO] Cache de tournament_page contiene challenge de Cloudflare — borrando")
+            stale.unlink()
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.set_extra_http_headers({
-            "Accept-Language": "en-US,en;q=0.9",
-        })
+        browser, page = _launch_browser(p)
 
         print("=== BRONZE: Descubriendo URLs de equipos ===")
+        print("[INFO] Se abrirá Chrome. Espera a que Cloudflare pase el challenge (~3s)...")
         team_urls = discover_team_urls(page)
 
         if not team_urls:
