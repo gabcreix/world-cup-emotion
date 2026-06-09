@@ -21,7 +21,7 @@ from bs4 import BeautifulSoup, Comment
 # Rutas
 # ---------------------------------------------------------------------------
 
-ROOT = Path(__file__).resolve().parents[5]
+ROOT = Path(__file__).resolve().parents[4]
 BRONZE_DIR = ROOT / "data" / "bronze" / "fbref_squads"
 SILVER_DIR = ROOT / "data" / "silver" / "fbref_squads"
 

@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 # Rutas
 # ---------------------------------------------------------------------------
 
-ROOT = Path(__file__).resolve().parents[5]
+ROOT = Path(__file__).resolve().parents[4]
 BRONZE_DIR = ROOT / "data" / "bronze" / "fbref_squads"
 
 # ---------------------------------------------------------------------------
