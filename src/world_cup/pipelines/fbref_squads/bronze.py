@@ -161,7 +161,11 @@ def run() -> dict[str, str]:
             fetch_squad_html(driver, name, url)
 
     finally:
-        driver.quit()
+        # Suprimir el OSError de __del__ (bug conocido de uc en Windows)
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
     return team_urls
 
