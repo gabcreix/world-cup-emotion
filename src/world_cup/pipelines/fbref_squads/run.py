@@ -5,14 +5,14 @@ Ejecuta las capas en orden:
     python -m world_cup.pipelines.fbref_squads.run
 
 Flags:
-    --bronze-only   Solo descarga HTMLs y persiste en bronze (sin silver)
-    --silver-only   Solo normaliza desde disco local (sin Chrome, sin BD bronze)
-    --skip-db       Ejecuta todo pero no escribe en BD (útil para debug)
+    --bronze-only   Solo descarga HTMLs y persiste en bronze (sin silver/gold)
+    --silver-only   Solo normaliza desde disco local (sin Chrome, sin BD bronze, sin gold)
+    --skip-db       Ejecuta todo pero no escribe en BD (silver/gold se omiten)
 """
 
 import sys
 
-from world_cup.pipelines.fbref_squads import bronze, silver
+from world_cup.pipelines.fbref_squads import bronze, gold, silver
 
 
 def main():
@@ -34,6 +34,12 @@ def main():
         print("=" * 60)
         # Si venimos de --silver-only no hay run_id → lee desde disco
         silver.run(run_id=run_id, skip_db=skip_db)
+
+        if not skip_db:
+            print("\n" + "=" * 60)
+            print("GOLD — Upsert en jugador / convocatoria")
+            print("=" * 60)
+            gold.run(run_id=run_id)
 
 
 if __name__ == "__main__":
