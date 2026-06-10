@@ -39,8 +39,18 @@ def _load_fuentes(cur) -> list[tuple[int, str, str, str | None]]:
 # Descarga de feeds
 # ---------------------------------------------------------------------------
 
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
 def _fetch_feed_entries(rss_url: str) -> list[dict]:
-    feed = feedparser.parse(rss_url)
+    feed = feedparser.parse(rss_url, agent=USER_AGENT)
+
+    if not feed.entries:
+        print(f"    [DEBUG] status={feed.get('status')} bozo={feed.get('bozo')} "
+              f"bozo_exception={feed.get('bozo_exception')!r}")
 
     entries = []
     for entry in feed.entries:
