@@ -9,6 +9,7 @@ del DOM resultante.
 """
 
 import time
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
@@ -18,8 +19,11 @@ NEWSNOW_URL = "https://www.newsnow.co.uk/h/Sport/Football/International/2026+FIF
 PAGE_WAIT = 8.0
 MIN_TITLE_LEN = 20
 
-# Dominios a ignorar: el propio NewsNow, redes sociales, ad-tech/tracking
+# Dominios a ignorar: el sitio principal de NewsNow, redes sociales,
+# ad-tech/tracking. Nota: c.newsnow.co.uk es el dominio de redirección
+# de los enlaces de titulares y NO debe ignorarse.
 _IGNORED_DOMAINS = (
+    "www.newsnow.co.uk",
     "newsnow.co.uk",
     "criteo.com",
     "doubleclick.net",
@@ -47,7 +51,7 @@ def _extract_entries(html: str) -> list[dict]:
         href = a["href"].strip()
         if not href.startswith("http"):
             continue
-        if any(domain in href for domain in _IGNORED_DOMAINS):
+        if urlparse(href).netloc in _IGNORED_DOMAINS:
             continue
 
         title = a.get_text(" ", strip=True)
