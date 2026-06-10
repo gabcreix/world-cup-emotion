@@ -11,7 +11,9 @@ _DATABASE_URL = os.environ["DATABASE_URL"]
 
 @contextmanager
 def get_conn():
-    with psycopg.connect(_DATABASE_URL) as conn:
+    # prepare_threshold=None: el pooler de Supabase (pgbouncer, modo
+    # transacción) no soporta prepared statements entre conexiones.
+    with psycopg.connect(_DATABASE_URL, prepare_threshold=None) as conn:
         yield conn
 
 
