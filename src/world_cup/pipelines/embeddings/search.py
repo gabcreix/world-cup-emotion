@@ -42,13 +42,21 @@ if __name__ == "__main__":
     sys.stderr.reconfigure(encoding="utf-8")
 
     if len(sys.argv) < 2:
-        raise SystemExit("Uso: python -m world_cup.pipelines.embeddings.search \"<consulta>\"")
+        raise SystemExit(
+            "Uso: python -m world_cup.pipelines.embeddings.search \"<consulta>\" [top_n]"
+        )
 
-    consulta = " ".join(sys.argv[1:])
-    print(f"Consulta: {consulta!r}")
+    args = sys.argv[1:]
+    top_n = TOP_N
+    if len(args) > 1 and args[-1].isdigit():
+        top_n = int(args[-1])
+        args = args[:-1]
+
+    consulta = " ".join(args)
+    print(f"Consulta: {consulta!r} (top_n={top_n})")
     print(f"Bytes: {consulta.encode('utf-8')!r}\n")
 
-    resultados = search(consulta)
+    resultados = search(consulta, top_n)
     print(f"{len(resultados)} resultados\n")
 
     for titulo, url, distancia in resultados:
