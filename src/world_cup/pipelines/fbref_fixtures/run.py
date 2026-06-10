@@ -5,13 +5,13 @@ Ejecuta las capas en orden:
     python -m world_cup.pipelines.fbref_fixtures.run
 
 Flags:
-    --bronze-only   Solo descarga el calendario y persiste en bronze (sin silver)
-    --skip-db       Ejecuta todo pero no escribe en BD (útil para debug)
+    --bronze-only   Solo descarga el calendario y persiste en bronze (sin silver/gold)
+    --skip-db       Ejecuta todo pero no escribe en BD (silver/gold se omiten)
 """
 
 import sys
 
-from world_cup.pipelines.fbref_fixtures import bronze, silver
+from world_cup.pipelines.fbref_fixtures import bronze, gold, silver
 
 
 def main():
@@ -29,8 +29,14 @@ def main():
         print("=" * 60)
         if run_id:
             silver.run(run_id=run_id, skip_db=skip_db)
+
+            if not skip_db:
+                print("\n" + "=" * 60)
+                print("GOLD — Upsert en partido")
+                print("=" * 60)
+                gold.run(run_id=run_id)
         else:
-            print("  [INFO] Sin run_id — omitiendo silver (usa --skip-db solo para depurar bronze)")
+            print("  [INFO] Sin run_id — omitiendo silver/gold (usa --skip-db solo para depurar bronze)")
 
 
 if __name__ == "__main__":
