@@ -122,10 +122,17 @@ def _extract_raw_players(html: str) -> list[dict]:
             continue
 
         link = name_cell.find("a")
+
+        dob_cell = None
+        for stat in ("birth_date", "dob"):
+            dob_cell = row.find("td", {"data-stat": stat})
+            if dob_cell is not None:
+                break
+
         players.append({
             "player":       name_cell.get_text(strip=True),
             "position":     (row.find("td", {"data-stat": "position"}) or {}).get_text("", strip=True) if hasattr(row.find("td", {"data-stat": "position"}), "get_text") else "",
-            "dob":          (row.find("td", {"data-stat": "dob"}) or {}).get_text("", strip=True) if hasattr(row.find("td", {"data-stat": "dob"}), "get_text") else "",
+            "dob":          dob_cell.get_text("", strip=True) if dob_cell is not None else "",
             "nationality":  (row.find("td", {"data-stat": "nationality"}) or {}).get_text("", strip=True) if hasattr(row.find("td", {"data-stat": "nationality"}), "get_text") else "",
             "fbref_url":    (BASE_URL + link["href"]) if link else None,
         })
