@@ -14,6 +14,7 @@ Requiere haber ejecutado antes:
 """
 
 import json
+import re
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Comment
@@ -157,12 +158,16 @@ def run(skip_db: bool = False) -> tuple[list[tuple[str, str, dict]], str | None]
 
     records: list[tuple[str, str, dict]] = []
     sin_candidato: list[str] = []
+    sin_html: list[str] = []
 
-    for html_file in sorted(SQUADS_DIR.glob("*.html")):
-        team_name = html_file.stem.replace("_", " ")
-        team_url = team_urls.get(team_name, "")
+    for team_name, team_url in sorted(team_urls.items()):
+        safe_name = re.sub(r"[^\w]", "_", team_name)
+        html_file = SQUADS_DIR / f"{safe_name}.html"
+        if not html_file.exists():
+            sin_html.append(team_name)
+            continue
+
         html = html_file.read_text(encoding="utf-8")
-
         raw = _extract_raw_meta(html)
         records.append((team_name, team_url, raw))
 
@@ -170,6 +175,10 @@ def run(skip_db: bool = False) -> tuple[list[tuple[str, str, dict]], str | None]
             sin_candidato.append(team_name)
 
     print(f"  {len(records)} equipos procesados")
+    if sin_html:
+        print(f"\n  [WARN] Sin HTML cacheado ({len(sin_html)}):")
+        for t in sin_html[:20]:
+            print(f"    - {t}")
     if sin_candidato:
         print(f"\n  [WARN] Sin candidato a DT ({len(sin_candidato)}):")
         for t in sin_candidato[:20]:
