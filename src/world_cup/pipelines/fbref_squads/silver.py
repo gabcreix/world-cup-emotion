@@ -10,9 +10,8 @@ Filtra equipos no clasificados al Mundial 2026 via FBREF_NAME_TO_FIFA.
 import json
 from pathlib import Path
 
-from bs4 import BeautifulSoup, Comment
-
 from world_cup import db
+from world_cup.fbref_teams import FBREF_NAME_TO_FIFA
 
 # ---------------------------------------------------------------------------
 # Rutas
@@ -20,61 +19,6 @@ from world_cup import db
 
 ROOT = Path(__file__).resolve().parents[4]
 SILVER_DIR = ROOT / "data" / "silver" / "fbref_squads"
-
-# ---------------------------------------------------------------------------
-# Mapeo nombre FBref → codigo_fifa (solo los 48 clasificados)
-# ---------------------------------------------------------------------------
-
-FBREF_NAME_TO_FIFA: dict[str, str] = {
-    "Algeria":              "ALG",
-    "Argentina":            "ARG",
-    "Australia":            "AUS",
-    "Austria":              "AUT",
-    "Belgium":              "BEL",
-    "Bosnia-Herzegovina":   "BIH",
-    "Brazil":               "BRA",
-    "Canada":               "CAN",
-    "Cape Verde":           "CPV",
-    "Colombia":             "COL",
-    "Congo DR":             "COD",
-    "Croatia":              "CRO",
-    "Curaçao":              "CUW",
-    "Czechia":              "CZE",
-    "Côte d'Ivoire":        "CIV",
-    "Ecuador":              "ECU",
-    "Egypt":                "EGY",
-    "England":              "ENG",
-    "France":               "FRA",
-    "Germany":              "GER",
-    "Ghana":                "GHA",
-    "Haiti":                "HAI",
-    "IR Iran":              "IRN",
-    "Iraq":                 "IRQ",
-    "Japan":                "JPN",
-    "Jordan":               "JOR",
-    "Korea Republic":       "KOR",
-    "Mexico":               "MEX",
-    "Morocco":              "MAR",
-    "Netherlands":          "NED",
-    "New Zealand":          "NZL",
-    "Norway":               "NOR",
-    "Panama":               "PAN",
-    "Paraguay":             "PAR",
-    "Portugal":             "POR",
-    "Qatar":                "QAT",
-    "Saudi Arabia":         "KSA",
-    "Scotland":             "SCO",
-    "Senegal":              "SEN",
-    "South Africa":         "RSA",
-    "Spain":                "ESP",
-    "Sweden":               "SWE",
-    "Switzerland":          "SUI",
-    "Tunisia":              "TUN",
-    "Türkiye":              "TUR",
-    "United States":        "USA",
-    "Uruguay":              "URU",
-    "Uzbekistan":           "UZB",
-}
 
 # ---------------------------------------------------------------------------
 # Mapeo posiciones FBref → enum BD
