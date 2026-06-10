@@ -28,6 +28,9 @@ from world_cup.pipelines.fbref_squads.bronze import (
 ROOT = Path(__file__).resolve().parents[4]
 BRONZE_DIR = ROOT / "data" / "bronze" / "fbref_fixtures"
 
+# URL conocida del calendario del Mundial 2026 (fallback si la discovery falla)
+SCHEDULE_URL = "https://fbref.com/en/comps/1/schedule/World-Cup-Scores-and-Fixtures"
+
 
 # ---------------------------------------------------------------------------
 # Discovery: enlace "Scores & Fixtures" desde la página del torneo
@@ -40,10 +43,10 @@ def discover_schedule_url(driver) -> str | None:
 
     for a in soup.select("a[href*='/schedule/']"):
         href = a["href"]
-        if re.match(r"^/en/comps/\d+/2026/schedule/.+", href):
+        if re.match(r"^/en/comps/\d+/.*schedule.*", href):
             return BASE_URL + href
 
-    return None
+    return SCHEDULE_URL
 
 
 def fetch_schedule_html(driver, schedule_url: str) -> str:
