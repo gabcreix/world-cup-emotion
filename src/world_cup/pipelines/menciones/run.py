@@ -1,9 +1,9 @@
 """
-Menciones — Detección de selecciones mencionadas en noticias.
+Menciones — Detección de entidades (selecciones, DTs) en noticias.
 
-Recorre `noticia` (titulo + resumen) buscando los alias de
-`alias_entidad` (entidad_tipo='seleccion') y persiste una fila por
-cada (noticia, selección) detectada en `mencion`.
+Para cada entidad_tipo soportado, recorre `noticia` (titulo + resumen)
+buscando los alias de `alias_entidad` y persiste una fila por cada
+(noticia, entidad) detectada en `mencion`.
 
 Idempotente vía UNIQUE(noticia_id, entidad_tipo, entidad_id) + ON CONFLICT.
 
@@ -15,7 +15,7 @@ import re
 
 from world_cup import db
 
-ENTIDAD_TIPO = "seleccion"
+ENTIDAD_TIPOS = ("seleccion", "dt")
 CONTEXTO_RADIO = 80  # caracteres antes/después del match para el contexto
 
 
@@ -23,10 +23,10 @@ CONTEXTO_RADIO = 80  # caracteres antes/después del match para el contexto
 # Carga de alias y noticias
 # ---------------------------------------------------------------------------
 
-def _load_aliases(cur) -> list[tuple[str, int]]:
+def _load_aliases(cur, entidad_tipo: str) -> list[tuple[str, int]]:
     cur.execute(
         "SELECT alias, entidad_id FROM alias_entidad WHERE entidad_tipo = %s",
-        (ENTIDAD_TIPO,),
+        (entidad_tipo,),
     )
     return cur.fetchall()
 
@@ -69,7 +69,7 @@ def _find_mentions(pattern: re.Pattern, alias_to_entidad: dict[str, int], texto:
 # Persistencia
 # ---------------------------------------------------------------------------
 
-def _persist_records(records: list[tuple[int, int, str]]) -> int:
+def _persist_records(entidad_tipo: str, records: list[tuple[int, int, str]]) -> int:
     creadas = 0
     with db.get_conn() as conn:
         with conn.cursor() as cur:
@@ -80,7 +80,7 @@ def _persist_records(records: list[tuple[int, int, str]]) -> int:
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (noticia_id, entidad_tipo, entidad_id) DO NOTHING
                     """,
-                    (noticia_id, ENTIDAD_TIPO, entidad_id, contexto[:500]),
+                    (noticia_id, entidad_tipo, entidad_id, contexto[:500]),
                 )
                 creadas += cur.rowcount
         conn.commit()
@@ -94,26 +94,27 @@ def _persist_records(records: list[tuple[int, int, str]]) -> int:
 def run() -> None:
     with db.get_conn() as conn:
         with conn.cursor() as cur:
-            aliases = _load_aliases(cur)
             noticias = _load_noticias(cur)
 
-    if not aliases:
-        print("[ERROR] No hay alias de selecciones en alias_entidad.")
-        return
+            for entidad_tipo in ENTIDAD_TIPOS:
+                aliases = _load_aliases(cur, entidad_tipo)
 
-    pattern, alias_to_entidad = _build_pattern(aliases)
+                if not aliases:
+                    print(f"[WARN] No hay alias de '{entidad_tipo}' en alias_entidad. Omitiendo.")
+                    continue
 
-    records: list[tuple[int, int, str]] = []
-    for noticia_id, titulo, resumen in noticias:
-        texto = titulo + ("\n" + resumen if resumen else "")
-        for entidad_id, contexto in _find_mentions(pattern, alias_to_entidad, texto).items():
-            records.append((noticia_id, entidad_id, contexto))
+                pattern, alias_to_entidad = _build_pattern(aliases)
 
-    print(f"  {len(noticias)} noticias analizadas")
-    print(f"  {len(records)} menciones detectadas")
+                records: list[tuple[int, int, str]] = []
+                for noticia_id, titulo, resumen in noticias:
+                    texto = titulo + ("\n" + resumen if resumen else "")
+                    for entidad_id, contexto in _find_mentions(pattern, alias_to_entidad, texto).items():
+                        records.append((noticia_id, entidad_id, contexto))
 
-    creadas = _persist_records(records)
-    print(f"\n  [BD] mencion: {creadas} creadas, {len(records) - creadas} ya existentes")
+                print(f"[{entidad_tipo}] {len(records)} menciones detectadas sobre {len(noticias)} noticias")
+
+                creadas = _persist_records(entidad_tipo, records)
+                print(f"  [BD] mencion: {creadas} creadas, {len(records) - creadas} ya existentes\n")
 
 
 if __name__ == "__main__":
