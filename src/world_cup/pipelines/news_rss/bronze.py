@@ -18,6 +18,7 @@ import feedparser
 import requests
 
 from world_cup import db
+from world_cup.pipelines.news_rss import scrape_newsnow
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +131,10 @@ def run(skip_db: bool = False) -> tuple[list[tuple[int, dict]], str | None]:
 
     records: list[tuple[int, dict]] = []
     for fuente_id, codigo, rss_url, _idioma in fuentes:
-        entries = _fetch_feed_entries(rss_url)
+        if codigo == "newsnow":
+            entries = scrape_newsnow.fetch_entries()
+        else:
+            entries = _fetch_feed_entries(rss_url)
         print(f"  {codigo}: {len(entries)} entradas ({rss_url})")
         for entry in entries:
             records.append((fuente_id, entry))
