@@ -36,12 +36,21 @@ def search(query: str, top_n: int = TOP_N) -> list[tuple[str, str, float]]:
 
 
 if __name__ == "__main__":
+    # Forzar UTF-8 en stdout/stderr (evita UnicodeEncodeError en consolas
+    # Windows con páginas de código distintas, p.ej. cp1252).
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
     if len(sys.argv) < 2:
         raise SystemExit("Uso: python -m world_cup.pipelines.embeddings.search \"<consulta>\"")
 
     consulta = " ".join(sys.argv[1:])
-    print(f"Consulta: {consulta!r}\n")
+    print(f"Consulta: {consulta!r}")
+    print(f"Bytes: {consulta.encode('utf-8')!r}\n")
 
-    for titulo, url, distancia in search(consulta):
+    resultados = search(consulta)
+    print(f"{len(resultados)} resultados\n")
+
+    for titulo, url, distancia in resultados:
         print(f"  [{distancia:.4f}] {titulo}")
         print(f"           {url}")
