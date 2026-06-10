@@ -32,5 +32,5 @@ print(f"history (redirects): {[r.status_code for r in resp.history]}")
 for r in resp.history:
     print(f"  {r.status_code} -> {r.headers.get('Location')}")
 print(f"content-type: {resp.headers.get('content-type')}")
-print(f"\n--- primeros 1000 caracteres del body ---")
-print(resp.text[:1000])
+print(f"\n--- body completo ---")
+print(resp.text)
