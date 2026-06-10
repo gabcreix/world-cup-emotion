@@ -74,23 +74,23 @@ def _extract_entries(html: str) -> list[dict]:
 
 
 def _resolve_redirect(url: str) -> str:
-    """Sigue la redirección de c.newsnow.co.uk y devuelve la URL final del artículo."""
-    try:
-        resp = requests.head(
-            url, headers={"User-Agent": USER_AGENT}, allow_redirects=True, timeout=10
-        )
-        if resp.url and resp.url != url:
-            return resp.url
+    """
+    Resuelve un enlace de tracking c.newsnow.co.uk/A/... a la URL del
+    artículo original.
 
-        # Algunos servidores no soportan HEAD correctamente: probar con GET
-        resp = requests.get(
-            url, headers={"User-Agent": USER_AGENT}, allow_redirects=True,
-            timeout=10, stream=True,
-        )
-        resp.close()
-        return resp.url
+    NewsNow no usa una redirección HTTP (Location header), sino una
+    página intermedia "Loading story..." que contiene un enlace
+    <a class="continue-button" href="..."> con la URL real.
+    """
+    try:
+        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=10)
+        soup = BeautifulSoup(resp.text, "lxml")
+        link = soup.find("a", class_="continue-button")
+        if link and link.get("href", "").startswith("http"):
+            return link["href"]
     except requests.RequestException:
-        return url
+        pass
+    return url
 
 
 def fetch_entries() -> list[dict]:
