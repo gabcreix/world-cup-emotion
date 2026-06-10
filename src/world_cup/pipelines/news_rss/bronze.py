@@ -11,9 +11,11 @@ Uso:
 import calendar
 import datetime
 import json
+import re
 import time
 
 import feedparser
+import requests
 
 from world_cup import db
 
@@ -44,9 +46,18 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+# Caracteres de control no permitidos en XML 1.0 (excepto tab/CR/LF)
+_INVALID_XML_CHARS_RE = re.compile(
+    "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
+)
+
 
 def _fetch_feed_entries(rss_url: str) -> list[dict]:
-    feed = feedparser.parse(rss_url, agent=USER_AGENT)
+    resp = requests.get(rss_url, headers={"User-Agent": USER_AGENT}, timeout=15)
+    resp.raise_for_status()
+    content = _INVALID_XML_CHARS_RE.sub("", resp.text)
+
+    feed = feedparser.parse(content)
 
     if not feed.entries:
         print(f"    [DEBUG] status={feed.get('status')} bozo={feed.get('bozo')} "
