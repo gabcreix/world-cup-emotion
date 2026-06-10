@@ -601,7 +601,7 @@ VALUES (
 
 INSERT INTO fase (fase_id, edicion_id, nombre, codigo, orden, num_partidos, eliminatoria)
 VALUES
-    (1, 1, 'Fase de grupos',       'GRP', 1, 48,  FALSE),
+    (1, 1, 'Fase de grupos',       'GRP', 1, 72,  FALSE),
     (2, 1, 'Round of 32',          'R32', 2, 16,  TRUE),
     (3, 1, 'Octavos de final',     'R16', 3,  8,  TRUE),
     (4, 1, 'Cuartos de final',     'QF',  4,  4,  TRUE),
