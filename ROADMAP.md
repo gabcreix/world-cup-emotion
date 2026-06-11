@@ -19,6 +19,7 @@ el match report (1–3h después del pitido final).
 | `embeddings` | Vectorización de noticias con OpenAI text-embedding-3-small → `embedding` |
 | `menciones` | Detección de entidades (seleccion, dt, jugador) en noticias (título + resumen + texto completo) → `mencion` |
 | `reports.news` | Reporte HTML consolidado de noticias, menciones y cobertura de embeddings |
+| `historico_mundiales` | Histórico de 22 mundiales masculinos (1930-2022): ediciones y resultados (bronze → gold → `historico_edicion` / `historico_resultado`) |
 
 ### ⏳ Pendientes — por orden de prioridad
 
@@ -41,16 +42,6 @@ el match report (1–3h después del pitido final).
   - `stats_extra_json` (JSONB, solo porteros): paradas, goles_encajados, paradas_penalti,
     salidas, despejes_puño, pases_largos_completados, pases_largos_intentados
   - `evento_partido`: goles, tarjetas, sustituciones, minuto, jugador, jugador relacionado
-
----
-
-## Prioridad 2 — Esta semana
-
-### Histórico de mundiales
-- **Tablas destino**: `historico_edicion`, `historico_resultado`, `historico_record`
-- **Fuente sugerida**: dataset Kaggle de resultados históricos FIFA (1930–2022),
-  complementado con Wikipedia API para récords y datos de edición
-- **Valor**: convierte un stat del torneo actual en narrativa con contexto de 22 mundiales
 
 ---
 
