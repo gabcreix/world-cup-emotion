@@ -109,7 +109,7 @@ def _sentimiento_por_seleccion(cur) -> list[dict]:
         JOIN pais p ON p.pais_id = s.pais_id
         WHERE m.entidad_tipo = 'seleccion'
         GROUP BY p.nombre
-        ORDER BY (positivo + neutro + negativo) DESC, nombre
+        ORDER BY COUNT(*) DESC, nombre
         """
     )
     cols = [c.name for c in cur.description]
