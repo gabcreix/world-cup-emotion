@@ -58,7 +58,12 @@ def _find_mentions(pattern: re.Pattern, alias_to_entidad: dict[str, int], texto:
     """Devuelve {entidad_id: contexto} para la primera mención de cada entidad en el texto."""
     encontrados: dict[int, str] = {}
     for m in pattern.finditer(texto):
-        entidad_id = alias_to_entidad[m.group(0).lower()]
+        # m.group(0).lower() puede no coincidir con la clave si el alias
+        # contiene letras turcas (İ/ı), cuyo plegado de mayúsculas/minúsculas
+        # difiere entre re.IGNORECASE y str.lower(). Se ignora ese match.
+        entidad_id = alias_to_entidad.get(m.group(0).lower())
+        if entidad_id is None:
+            continue
         if entidad_id in encontrados:
             continue
         inicio = max(0, m.start() - CONTEXTO_RADIO)
