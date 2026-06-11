@@ -89,6 +89,33 @@ def _menciones_por_jugador(cur, top_n: int = 20) -> list[dict]:
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
+def _sentimiento_resumen(cur) -> dict[str, int]:
+    cur.execute(
+        "SELECT sentimiento, COUNT(*) FROM mencion WHERE sentimiento IS NOT NULL GROUP BY sentimiento"
+    )
+    return dict(cur.fetchall())
+
+
+def _sentimiento_por_seleccion(cur) -> list[dict]:
+    cur.execute(
+        """
+        SELECT
+            p.nombre AS nombre,
+            COUNT(*) FILTER (WHERE m.sentimiento = 'positivo') AS positivo,
+            COUNT(*) FILTER (WHERE m.sentimiento = 'neutro')   AS neutro,
+            COUNT(*) FILTER (WHERE m.sentimiento = 'negativo') AS negativo
+        FROM mencion m
+        JOIN seleccion s ON s.seleccion_id = m.entidad_id
+        JOIN pais p ON p.pais_id = s.pais_id
+        WHERE m.entidad_tipo = 'seleccion'
+        GROUP BY p.nombre
+        ORDER BY (positivo + neutro + negativo) DESC, nombre
+        """
+    )
+    cols = [c.name for c in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
 def _noticias_recientes(cur) -> list[dict]:
     cur.execute(
         """
@@ -180,6 +207,8 @@ def _build_html(
     menciones_seleccion: list[dict],
     menciones_dt: list[dict],
     menciones_jugador: list[dict],
+    sentimiento_resumen: dict[str, int],
+    sentimiento_seleccion: list[dict],
     noticias: list[dict],
     avisos: list[str],
 ) -> str:
@@ -212,6 +241,17 @@ def _build_html(
     menciones_jugador_rows = "".join(
         f"<tr><td>{html.escape(r['nombre'])}</td><td>{r['total']}</td></tr>"
         for r in menciones_jugador
+    )
+
+    total_sentimiento = sum(sentimiento_resumen.values())
+    positivo = sentimiento_resumen.get("positivo", 0)
+    neutro = sentimiento_resumen.get("neutro", 0)
+    negativo = sentimiento_resumen.get("negativo", 0)
+
+    sentimiento_seleccion_rows = "".join(
+        f"<tr><td>{html.escape(r['nombre'])}</td>"
+        f"<td>😊 {r['positivo']}</td><td>😐 {r['neutro']}</td><td>😟 {r['negativo']}</td></tr>"
+        for r in sentimiento_seleccion
     )
 
     noticias_rows = ""
@@ -263,6 +303,7 @@ def _build_html(
     <div class="stat-box"><b>{sum(r['total'] for r in menciones_seleccion)}</b>Menciones de selecciones</div>
     <div class="stat-box"><b>{sum(r['total'] for r in menciones_dt)}</b>Menciones de DTs</div>
     <div class="stat-box"><b>{sum(r['total'] for r in menciones_jugador)}</b>Menciones de jugadores</div>
+    <div class="stat-box"><b>{positivo} / {neutro} / {negativo}</b>Sentimiento (positivo / neutro / negativo) de {total_sentimiento} menciones</div>
   </div>
 
   <h2>Validaciones</h2>
@@ -299,6 +340,12 @@ def _build_html(
     </div>
   </div>
 
+  <h2>Sentimiento por selección</h2>
+  <table>
+    <thead><tr><th>Selección</th><th>Positivo</th><th>Neutro</th><th>Negativo</th></tr></thead>
+    <tbody>{sentimiento_seleccion_rows}</tbody>
+  </table>
+
   <h2>Noticias recientes (últimas {NOTICIAS_RECIENTES})</h2>
   <table>
     <thead>
@@ -321,12 +368,17 @@ def run() -> Path:
             menciones_seleccion = _menciones_por_seleccion(cur)
             menciones_dt = _menciones_por_dt(cur)
             menciones_jugador = _menciones_por_jugador(cur)
+            sentimiento_resumen = _sentimiento_resumen(cur)
+            sentimiento_seleccion = _sentimiento_por_seleccion(cur)
             noticias = _noticias_recientes(cur)
             avisos = _validaciones(cur)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     OUT_FILE.write_text(
-        _build_html(resumen_fuentes, menciones_seleccion, menciones_dt, menciones_jugador, noticias, avisos),
+        _build_html(
+            resumen_fuentes, menciones_seleccion, menciones_dt, menciones_jugador,
+            sentimiento_resumen, sentimiento_seleccion, noticias, avisos,
+        ),
         encoding="utf-8",
     )
     print(f"Reporte generado: {OUT_FILE}")
