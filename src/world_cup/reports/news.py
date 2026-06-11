@@ -3,7 +3,7 @@ Reporte HTML — Noticias (news_rss + menciones + embeddings).
 
 Genera data/reports/news.html con:
     - Resumen por fuente (noticias, cobertura de embeddings)
-    - Menciones detectadas por entidad (selecciones y DTs)
+    - Menciones detectadas por entidad (selecciones, DTs y jugadores)
     - Detalle de noticias recientes con sus menciones
     - Validaciones (noticias sin embedding, sin menciones, etc.)
 
@@ -72,6 +72,23 @@ def _menciones_por_dt(cur) -> list[dict]:
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
+def _menciones_por_jugador(cur, top_n: int = 20) -> list[dict]:
+    cur.execute(
+        """
+        SELECT j.nombre_completo AS nombre, COUNT(*) AS total
+        FROM mencion m
+        JOIN jugador j ON j.jugador_id = m.entidad_id
+        WHERE m.entidad_tipo = 'jugador'
+        GROUP BY j.nombre_completo
+        ORDER BY total DESC, nombre
+        LIMIT %s
+        """,
+        (top_n,),
+    )
+    cols = [c.name for c in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
 def _noticias_recientes(cur) -> list[dict]:
     cur.execute(
         """
@@ -89,7 +106,11 @@ def _noticias_recientes(cur) -> list[dict]:
             COALESCE(
                 array_agg(DISTINCT d.nombre_completo) FILTER (WHERE m.entidad_tipo = 'dt'),
                 '{}'
-            ) AS dts
+            ) AS dts,
+            COALESCE(
+                array_agg(DISTINCT j.nombre_completo) FILTER (WHERE m.entidad_tipo = 'jugador'),
+                '{}'
+            ) AS jugadores
         FROM noticia n
         JOIN fuente f ON f.fuente_id = n.fuente_id
         LEFT JOIN embedding e ON e.noticia_id = n.noticia_id AND e.chunk_orden = 1
@@ -97,6 +118,7 @@ def _noticias_recientes(cur) -> list[dict]:
         LEFT JOIN seleccion s ON m.entidad_tipo = 'seleccion' AND s.seleccion_id = m.entidad_id
         LEFT JOIN pais p ON p.pais_id = s.pais_id
         LEFT JOIN dt d ON m.entidad_tipo = 'dt' AND d.dt_id = m.entidad_id
+        LEFT JOIN jugador j ON m.entidad_tipo = 'jugador' AND j.jugador_id = m.entidad_id
         GROUP BY n.noticia_id, n.titulo, n.url, f.nombre, n.fecha_publicacion, e.embedding_id
         ORDER BY n.fecha_ingestion DESC
         LIMIT %s
@@ -157,6 +179,7 @@ def _build_html(
     resumen_fuentes: list[dict],
     menciones_seleccion: list[dict],
     menciones_dt: list[dict],
+    menciones_jugador: list[dict],
     noticias: list[dict],
     avisos: list[str],
 ) -> str:
@@ -186,11 +209,16 @@ def _build_html(
         f"<tr><td>{html.escape(r['nombre'])}</td><td>{r['total']}</td></tr>"
         for r in menciones_dt
     )
+    menciones_jugador_rows = "".join(
+        f"<tr><td>{html.escape(r['nombre'])}</td><td>{r['total']}</td></tr>"
+        for r in menciones_jugador
+    )
 
     noticias_rows = ""
     for n in noticias:
         selecciones = ", ".join(n["selecciones"]) if n["selecciones"] else "—"
         dts = ", ".join(n["dts"]) if n["dts"] else "—"
+        jugadores = ", ".join(n["jugadores"]) if n["jugadores"] else "—"
         embedding_marca = "✅" if n["tiene_embedding"] else "—"
         fecha = n["fecha_publicacion"].strftime("%Y-%m-%d %H:%M") if n["fecha_publicacion"] else "—"
         noticias_rows += (
@@ -200,6 +228,7 @@ def _build_html(
             f"<td><a href=\"{html.escape(n['url'])}\" target=\"_blank\">{html.escape(n['titulo'])}</a></td>"
             f"<td>{html.escape(selecciones)}</td>"
             f"<td>{html.escape(dts)}</td>"
+            f"<td>{html.escape(jugadores)}</td>"
             f"<td>{embedding_marca}</td>"
             f"</tr>"
         )
@@ -233,6 +262,7 @@ def _build_html(
     <div class="stat-box"><b>{total_con_embedding}</b>Con embedding</div>
     <div class="stat-box"><b>{sum(r['total'] for r in menciones_seleccion)}</b>Menciones de selecciones</div>
     <div class="stat-box"><b>{sum(r['total'] for r in menciones_dt)}</b>Menciones de DTs</div>
+    <div class="stat-box"><b>{sum(r['total'] for r in menciones_jugador)}</b>Menciones de jugadores</div>
   </div>
 
   <h2>Validaciones</h2>
@@ -260,6 +290,13 @@ def _build_html(
         <tbody>{menciones_dt_rows}</tbody>
       </table>
     </div>
+    <div>
+      <h3>Jugadores (top {len(menciones_jugador)})</h3>
+      <table>
+        <thead><tr><th>Jugador</th><th>Menciones</th></tr></thead>
+        <tbody>{menciones_jugador_rows}</tbody>
+      </table>
+    </div>
   </div>
 
   <h2>Noticias recientes (últimas {NOTICIAS_RECIENTES})</h2>
@@ -267,7 +304,7 @@ def _build_html(
     <thead>
       <tr>
         <th>Fuente</th><th>Fecha</th><th>Título</th>
-        <th>Selecciones</th><th>DTs</th><th>Embedding</th>
+        <th>Selecciones</th><th>DTs</th><th>Jugadores</th><th>Embedding</th>
       </tr>
     </thead>
     <tbody>{noticias_rows}</tbody>
@@ -283,12 +320,13 @@ def run() -> Path:
             resumen_fuentes = _resumen_por_fuente(cur)
             menciones_seleccion = _menciones_por_seleccion(cur)
             menciones_dt = _menciones_por_dt(cur)
+            menciones_jugador = _menciones_por_jugador(cur)
             noticias = _noticias_recientes(cur)
             avisos = _validaciones(cur)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     OUT_FILE.write_text(
-        _build_html(resumen_fuentes, menciones_seleccion, menciones_dt, noticias, avisos),
+        _build_html(resumen_fuentes, menciones_seleccion, menciones_dt, menciones_jugador, noticias, avisos),
         encoding="utf-8",
     )
     print(f"Reporte generado: {OUT_FILE}")

@@ -1,5 +1,5 @@
 """
-Menciones — Detección de entidades (selecciones, DTs) en noticias.
+Menciones — Detección de entidades (selecciones, DTs, jugadores) en noticias.
 
 Para cada entidad_tipo soportado, recorre `noticia` (titulo + resumen)
 buscando los alias de `alias_entidad` y persiste una fila por cada
@@ -15,7 +15,7 @@ import re
 
 from world_cup import db
 
-ENTIDAD_TIPOS = ("seleccion", "dt")
+ENTIDAD_TIPOS = ("seleccion", "dt", "jugador")
 CONTEXTO_RADIO = 80  # caracteres antes/después del match para el contexto
 
 
