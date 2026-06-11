@@ -7,6 +7,9 @@ y persiste una fila por cada (noticia, entidad) detectada en `mencion`.
 
 Idempotente vía UNIQUE(noticia_id, entidad_tipo, entidad_id) + ON CONFLICT.
 
+Tras la detección, clasifica el sentimiento de las menciones nuevas (ver
+`sentimiento.py`).
+
 Uso:
     python -m world_cup.pipelines.menciones.run
 """
@@ -14,6 +17,7 @@ Uso:
 import re
 
 from world_cup import db
+from world_cup.pipelines.menciones import sentimiento
 
 ENTIDAD_TIPOS = ("seleccion", "dt", "jugador")
 CONTEXTO_RADIO = 80  # caracteres antes/después del match para el contexto
@@ -126,6 +130,9 @@ def run() -> None:
 
                 creadas = _persist_records(entidad_tipo, records)
                 print(f"  [BD] mencion: {creadas} creadas, {len(records) - creadas} ya existentes\n")
+
+    print("[sentimiento] Clasificando menciones pendientes")
+    sentimiento.run()
 
 
 if __name__ == "__main__":
