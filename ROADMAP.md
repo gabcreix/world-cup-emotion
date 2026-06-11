@@ -15,9 +15,10 @@ el match report (1–3h después del pitido final).
 | `fbref_fixtures` | Fixtures del torneo (bronze → silver → gold → `partido`) |
 | `fbref_dts` | Entrenadores (bronze → silver → gold → `dt` + `participacion.dt_id`) |
 | `fbref_squads` | Plantillas por selección (bronze → silver → gold) |
-| `news_rss` | Ingesta de noticias vía RSS + scraping NewsNow (bronze → silver → gold → `noticia`) |
+| `news_rss` | Ingesta de noticias vía RSS (bbc_sport, guardian, marca) + texto completo (trafilatura) (bronze → silver → gold → `noticia`) |
 | `embeddings` | Vectorización de noticias con OpenAI text-embedding-3-small → `embedding` |
-| `menciones` | Detección de entidades (seleccion, dt) en noticias → `mencion` |
+| `menciones` | Detección de entidades (seleccion, dt, jugador) en noticias (título + resumen + texto completo) → `mencion` |
+| `reports.news` | Reporte HTML consolidado de noticias, menciones y cobertura de embeddings |
 
 ### ⏳ Pendientes — por orden de prioridad
 
@@ -44,21 +45,6 @@ el match report (1–3h después del pitido final).
 ---
 
 ## Prioridad 2 — Esta semana
-
-### Texto completo de noticias
-- **Problema**: `news_rss` solo persiste título + resumen del RSS
-- **Impacto**: el pipeline de menciones pierde menciones de jugadores y entidades
-  secundarias que solo aparecen en el cuerpo del artículo
-- **Solución**: añadir scraping del cuerpo completo con `trafilatura` (añadir a
-  `pyproject.toml`) después de la ingesta RSS
-- **Campo destino**: `noticia.texto_completo`
-- **Nota**: aplicar por fuente o con extractor genérico; respetar robots.txt
-
-### Menciones de jugadores
-- **Problema**: `ENTIDAD_TIPOS` en `menciones/run.py` solo incluye `seleccion` y `dt`
-- **Requisito previo**: que `jugador` y `convocatoria` estén poblados (fbref_squads gold)
-- **Solución**: añadir `'jugador'` a `ENTIDAD_TIPOS` — el pipeline ya soporta la extensión
-- **Impacto**: las menciones de Mbappé, Yamal, Vinicius, etc. empezarán a registrarse
 
 ### Histórico de mundiales
 - **Tablas destino**: `historico_edicion`, `historico_resultado`, `historico_record`
