@@ -383,6 +383,7 @@ CREATE TABLE historico_resultado (
     penaltis_local          INTEGER,
     penaltis_visitante      INTEGER,
     fecha                   DATE,
+    match_id_externo        VARCHAR(20)     UNIQUE,
     creado_en               TIMESTAMP       NOT NULL DEFAULT NOW(),
     actualizado_en          TIMESTAMP       NOT NULL DEFAULT NOW()
 );
