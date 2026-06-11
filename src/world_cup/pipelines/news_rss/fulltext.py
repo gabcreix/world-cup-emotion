@@ -14,6 +14,7 @@ Uso:
     python -m world_cup.pipelines.news_rss.fulltext
 """
 
+import requests
 import trafilatura
 
 from world_cup import db
@@ -42,10 +43,12 @@ def _load_pendientes(cur) -> list[tuple[int, str]]:
 def _extraer_texto(url: str) -> str | None:
     """Devuelve el texto del artículo, cadena vacía si no se pudo extraer
     nada útil, o None si la descarga falló."""
-    descargado = trafilatura.fetch_url(url, user_agent=USER_AGENT)
-    if descargado is None:
+    try:
+        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
+        resp.raise_for_status()
+    except requests.RequestException:
         return None
-    texto = trafilatura.extract(descargado, include_comments=False, include_tables=False)
+    texto = trafilatura.extract(resp.text, include_comments=False, include_tables=False)
     return texto or ""
 
 
