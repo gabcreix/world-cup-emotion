@@ -19,7 +19,7 @@ el match report (1–3h después del pitido final).
 | `embeddings` | Vectorización de noticias con OpenAI text-embedding-3-small → `embedding` |
 | `menciones` | Detección de entidades (seleccion, dt, jugador) en noticias (título + resumen + texto completo) → `mencion` |
 | `reports.news` | Reporte HTML consolidado de noticias, menciones y cobertura de embeddings |
-| `historico_mundiales` | Histórico de 22 mundiales masculinos (1930-2022): ediciones y resultados (bronze → gold → `historico_edicion` / `historico_resultado`) |
+| `historico_mundiales` | Histórico de 22 mundiales masculinos (1930-2022): ediciones, resultados y récords (bronze → gold → `historico_edicion` / `historico_resultado` / `historico_record`) |
 
 ### ⏳ Pendientes — por orden de prioridad
 
