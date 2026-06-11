@@ -1,9 +1,9 @@
 """
 Menciones — Detección de entidades (selecciones, DTs, jugadores) en noticias.
 
-Para cada entidad_tipo soportado, recorre `noticia` (titulo + resumen)
-buscando los alias de `alias_entidad` y persiste una fila por cada
-(noticia, entidad) detectada en `mencion`.
+Para cada entidad_tipo soportado, recorre `noticia` (titulo + resumen +
+texto_completo, si está disponible) buscando los alias de `alias_entidad`
+y persiste una fila por cada (noticia, entidad) detectada en `mencion`.
 
 Idempotente vía UNIQUE(noticia_id, entidad_tipo, entidad_id) + ON CONFLICT.
 
@@ -31,8 +31,10 @@ def _load_aliases(cur, entidad_tipo: str) -> list[tuple[str, int]]:
     return cur.fetchall()
 
 
-def _load_noticias(cur) -> list[tuple[int, str, str | None]]:
-    cur.execute("SELECT noticia_id, titulo, resumen FROM noticia ORDER BY noticia_id")
+def _load_noticias(cur) -> list[tuple[int, str, str | None, str | None]]:
+    cur.execute(
+        "SELECT noticia_id, titulo, resumen, texto_completo FROM noticia ORDER BY noticia_id"
+    )
     return cur.fetchall()
 
 
@@ -106,8 +108,12 @@ def run() -> None:
                 pattern, alias_to_entidad = _build_pattern(aliases)
 
                 records: list[tuple[int, int, str]] = []
-                for noticia_id, titulo, resumen in noticias:
-                    texto = titulo + ("\n" + resumen if resumen else "")
+                for noticia_id, titulo, resumen, texto_completo in noticias:
+                    texto = titulo
+                    if resumen:
+                        texto += "\n" + resumen
+                    if texto_completo:
+                        texto += "\n" + texto_completo
                     for entidad_id, contexto in _find_mentions(pattern, alias_to_entidad, texto).items():
                         records.append((noticia_id, entidad_id, contexto))
 

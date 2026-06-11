@@ -5,13 +5,13 @@ Ejecuta las capas en orden:
     python -m world_cup.pipelines.news_rss.run
 
 Flags:
-    --bronze-only   Solo descarga los feeds y persiste en bronze (sin silver/gold)
-    --skip-db       Ejecuta todo pero no escribe en BD (silver/gold se omiten)
+    --bronze-only   Solo descarga los feeds y persiste en bronze (sin silver/gold/fulltext)
+    --skip-db       Ejecuta todo pero no escribe en BD (silver/gold/fulltext se omiten)
 """
 
 import sys
 
-from world_cup.pipelines.news_rss import bronze, gold, silver
+from world_cup.pipelines.news_rss import bronze, fulltext, gold, silver
 
 
 def main():
@@ -35,6 +35,11 @@ def main():
                 print("GOLD — Upsert en noticia")
                 print("=" * 60)
                 gold.run(run_id=run_id)
+
+                print("\n" + "=" * 60)
+                print("FULLTEXT — Texto completo de noticias")
+                print("=" * 60)
+                fulltext.run()
         else:
             print("  [INFO] Sin run_id — omitiendo silver/gold (usa --skip-db solo para depurar bronze)")
 
