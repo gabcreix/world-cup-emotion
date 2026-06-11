@@ -1,13 +1,18 @@
 """
 Gold layer — Histórico de mundiales.
 
-Lee la última run de bronze.historico_edicion_raw / historico_resultado_raw,
-aplica las transformaciones de `transform.py` y hace upsert idempotente en
-historico_edicion (UNIQUE anyo) e historico_resultado (UNIQUE match_id_externo).
+Lee la última run de bronze (ediciones, resultados, goleadores, apariciones,
+jugadores), aplica las transformaciones de `transform.py` y hace upsert
+idempotente en:
+    - historico_edicion   (UNIQUE anyo)
+    - historico_resultado (UNIQUE match_id_externo)
+    - historico_record    (refresco completo de los tipos calculados)
 """
 
 from world_cup import db
 from world_cup.pipelines.historico_mundiales import transform
+
+TIPOS_CALCULADOS = ("goleador_torneo", "goleador_historico", "mas_partidos", "mas_joven", "mas_veterano")
 
 
 def _load_latest_run(cur) -> str:
@@ -17,7 +22,7 @@ def _load_latest_run(cur) -> str:
     return cur.fetchone()[0]
 
 
-def _load_raw(cur, run_id: str) -> tuple[list[dict], list[dict]]:
+def _load_raw(cur, run_id: str) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict]]:
     cur.execute(
         "SELECT raw_json FROM bronze.historico_edicion_raw WHERE run_id = %s", (run_id,)
     )
@@ -28,7 +33,22 @@ def _load_raw(cur, run_id: str) -> tuple[list[dict], list[dict]]:
     )
     resultados = [row[0] for row in cur.fetchall()]
 
-    return ediciones, resultados
+    cur.execute(
+        "SELECT raw_json FROM bronze.historico_goleador_raw WHERE run_id = %s", (run_id,)
+    )
+    goles = [row[0] for row in cur.fetchall()]
+
+    cur.execute(
+        "SELECT raw_json FROM bronze.historico_aparicion_raw WHERE run_id = %s", (run_id,)
+    )
+    apariciones = [row[0] for row in cur.fetchall()]
+
+    cur.execute(
+        "SELECT raw_json FROM bronze.historico_jugador_raw WHERE run_id = %s", (run_id,)
+    )
+    jugadores = [row[0] for row in cur.fetchall()]
+
+    return ediciones, resultados, goles, apariciones, jugadores
 
 
 def _load_pais_lookup(cur) -> dict[str, int]:
@@ -150,11 +170,32 @@ def _upsert_resultado(cur, resultado: dict, historico_edicion_id: int,
     return True, avisos
 
 
+def _insert_record(cur, tipo: str, registro: dict, historico_edicion_id: int | None,
+                    pais_por_fifa: dict[str, int]) -> list[str]:
+    avisos = []
+    pais_id = None
+    if registro["codigo_fifa"] is not None:
+        pais_id = pais_por_fifa.get(registro["codigo_fifa"])
+        if pais_id is None:
+            avisos.append(f"{tipo} ({registro['jugador_ref']}): pais sin mapeo ({registro['codigo_fifa']})")
+
+    cur.execute(
+        """
+        INSERT INTO historico_record (
+            historico_edicion_id, pais_id, jugador_ref, tipo, valor, descripcion
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (historico_edicion_id, pais_id, registro["jugador_ref"], tipo,
+         registro["valor"], registro["descripcion"]),
+    )
+    return avisos
+
+
 def run() -> None:
     with db.get_conn() as conn:
         with conn.cursor() as cur:
             run_id = _load_latest_run(cur)
-            ediciones_raw, resultados_raw = _load_raw(cur, run_id)
+            ediciones_raw, resultados_raw, goles_raw, apariciones_raw, jugadores_raw = _load_raw(cur, run_id)
             pais_por_fifa = _load_pais_lookup(cur)
 
             avisos: list[str] = []
@@ -202,6 +243,33 @@ def run() -> None:
                 else:
                     resultados_omitidos += 1
 
+            # --- historico_record: refresco completo de los tipos calculados ---
+            cur.execute("DELETE FROM historico_record WHERE tipo = ANY(%s)", (list(TIPOS_CALCULADOS),))
+
+            registros_creados = 0
+
+            for registro in transform.build_goleadores_torneo(goles_raw):
+                anyo = tournament_anyo.get(registro["tournament_id"])
+                historico_edicion_id = edicion_id_por_anyo.get(anyo)
+                avisos.extend(_insert_record(cur, "goleador_torneo", registro, historico_edicion_id, pais_por_fifa))
+                registros_creados += 1
+
+            for registro in transform.build_goleador_historico(goles_raw):
+                avisos.extend(_insert_record(cur, "goleador_historico", registro, None, pais_por_fifa))
+                registros_creados += 1
+
+            for registro in transform.build_mas_partidos(apariciones_raw):
+                avisos.extend(_insert_record(cur, "mas_partidos", registro, None, pais_por_fifa))
+                registros_creados += 1
+
+            mas_jovenes, mas_veteranos = transform.build_extremos_edad(apariciones_raw, jugadores_raw)
+            for registro in mas_jovenes:
+                avisos.extend(_insert_record(cur, "mas_joven", registro, None, pais_por_fifa))
+                registros_creados += 1
+            for registro in mas_veteranos:
+                avisos.extend(_insert_record(cur, "mas_veterano", registro, None, pais_por_fifa))
+                registros_creados += 1
+
         conn.commit()
 
     print(f"  [BD] historico_edicion: {ediciones_creadas} creadas, {ediciones_actualizadas} actualizadas")
@@ -209,6 +277,7 @@ def run() -> None:
         f"  [BD] historico_resultado: {resultados_creados} creados, "
         f"{resultados_actualizados} actualizados, {resultados_omitidos} omitidos"
     )
+    print(f"  [BD] historico_record: {registros_creados} registros (refresco completo)")
     if avisos:
         print(f"\n  [WARN] Avisos ({len(avisos)}):")
         for a in avisos[:20]:

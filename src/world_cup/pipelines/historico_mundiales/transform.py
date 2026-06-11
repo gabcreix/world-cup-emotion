@@ -151,3 +151,144 @@ def _perdedor(resultado: dict) -> str:
     if ganador == resultado["home_codigo_fifa"]:
         return resultado["away_codigo_fifa"]
     return resultado["home_codigo_fifa"]
+
+
+# ---------------------------------------------------------------------------
+# Récords
+# ---------------------------------------------------------------------------
+
+def _nombre_jugador(raw: dict) -> str:
+    given = raw.get("given_name", "")
+    family = raw.get("family_name", "")
+    if given == "not applicable":
+        return family
+    return f"{given} {family}".strip()
+
+
+def _edad_str(dias: int) -> str:
+    anyos, resto = divmod(dias, 365)
+    if resto == 0:
+        return f"{anyos} años"
+    return f"{anyos} años, {resto} días"
+
+
+def build_goleadores_torneo(goles: list[dict]) -> list[dict]:
+    """Devuelve un dict por edición con el/los máximo(s) goleador(es)
+    (excluye autogoles; puede haber varios jugadores empatados)."""
+    conteo: dict[str, dict[str, int]] = {}
+    info: dict[str, tuple[str, str | None]] = {}
+
+    for g in goles:
+        if g["own_goal"] == "1":
+            continue
+        tournament_id = g["tournament_id"]
+        player_id = g["player_id"]
+        conteo.setdefault(tournament_id, {})
+        conteo[tournament_id][player_id] = conteo[tournament_id].get(player_id, 0) + 1
+        info[player_id] = (_nombre_jugador(g), CODE_MAP.get(g["player_team_code"]))
+
+    registros = []
+    for tournament_id, jugadores in conteo.items():
+        max_goles = max(jugadores.values())
+        for player_id, n in jugadores.items():
+            if n != max_goles:
+                continue
+            nombre, codigo = info[player_id]
+            registros.append({
+                "tournament_id": tournament_id,
+                "jugador_ref": nombre,
+                "codigo_fifa": codigo,
+                "valor": str(n),
+                "descripcion": "Máximo goleador de la edición",
+            })
+    return registros
+
+
+def build_goleador_historico(goles: list[dict]) -> list[dict]:
+    """Devuelve el/los máximo(s) goleador(es) histórico(s) (todos los
+    mundiales masculinos, excluye autogoles)."""
+    conteo: dict[str, int] = {}
+    info: dict[str, tuple[str, str | None]] = {}
+
+    for g in goles:
+        if g["own_goal"] == "1":
+            continue
+        player_id = g["player_id"]
+        conteo[player_id] = conteo.get(player_id, 0) + 1
+        info[player_id] = (_nombre_jugador(g), CODE_MAP.get(g["player_team_code"]))
+
+    if not conteo:
+        return []
+
+    max_goles = max(conteo.values())
+    return [
+        {
+            "jugador_ref": info[player_id][0],
+            "codigo_fifa": info[player_id][1],
+            "valor": str(n),
+            "descripcion": "Máximo goleador histórico de los mundiales (1930-2022)",
+        }
+        for player_id, n in conteo.items()
+        if n == max_goles
+    ]
+
+
+def build_mas_partidos(apariciones: list[dict]) -> list[dict]:
+    """Devuelve el/los jugador(es) con más partidos disputados (todos los
+    mundiales masculinos)."""
+    conteo: dict[str, int] = {}
+    info: dict[str, tuple[str, str | None]] = {}
+
+    for a in apariciones:
+        player_id = a["player_id"]
+        conteo[player_id] = conteo.get(player_id, 0) + 1
+        info[player_id] = (_nombre_jugador(a), CODE_MAP.get(a["team_code"]))
+
+    if not conteo:
+        return []
+
+    max_partidos = max(conteo.values())
+    return [
+        {
+            "jugador_ref": info[player_id][0],
+            "codigo_fifa": info[player_id][1],
+            "valor": str(n),
+            "descripcion": "Más partidos disputados en mundiales (1930-2022)",
+        }
+        for player_id, n in conteo.items()
+        if n == max_partidos
+    ]
+
+
+def build_extremos_edad(apariciones: list[dict], jugadores: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Devuelve (mas_jovenes, mas_veteranos): jugador(es) con la edad mínima/
+    máxima registrada al disputar un partido de un mundial masculino."""
+    from datetime import date
+
+    nacimientos = {j["player_id"]: j["birth_date"] for j in jugadores if j["birth_date"]}
+
+    edades: list[tuple[int, dict]] = []
+    for a in apariciones:
+        nacimiento = nacimientos.get(a["player_id"])
+        if not nacimiento or not a["match_date"]:
+            continue
+        dias = (date.fromisoformat(a["match_date"]) - date.fromisoformat(nacimiento)).days
+        edades.append((dias, a))
+
+    if not edades:
+        return [], []
+
+    def _registro(dias: int, a: dict) -> dict:
+        return {
+            "jugador_ref": _nombre_jugador(a),
+            "codigo_fifa": CODE_MAP.get(a["team_code"]),
+            "valor": _edad_str(dias),
+            "descripcion": f"{a['match_name']} ({a['match_date']})",
+        }
+
+    min_dias = min(d for d, _ in edades)
+    max_dias = max(d for d, _ in edades)
+
+    mas_jovenes = [_registro(d, a) for d, a in edades if d == min_dias]
+    mas_veteranos = [_registro(d, a) for d, a in edades if d == max_dias]
+    return mas_jovenes, mas_veteranos
