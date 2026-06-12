@@ -16,7 +16,7 @@ import json
 from openai import OpenAI
 
 from world_cup import db
-from world_cup.pipelines.narrativas import analiticas, historico
+from world_cup.pipelines.narrativas import analiticas, clustering, historico
 
 MODELO_LLM = "gpt-4o-mini"
 SYSTEM_PROMPT = """
@@ -80,7 +80,11 @@ def run() -> None:
     with db.get_conn() as conn:
         with conn.cursor() as cur:
             edicion_id = analiticas.load_edicion_id(cur)
-            candidatas = analiticas.generar(cur) + historico.generar(cur, edicion_id)
+            candidatas = (
+                analiticas.generar(cur)
+                + historico.generar(cur, edicion_id)
+                + clustering.generar(cur, edicion_id)
+            )
 
             if not candidatas:
                 print("[INFO] No hay narrativas candidatas a partir de las analíticas.")
