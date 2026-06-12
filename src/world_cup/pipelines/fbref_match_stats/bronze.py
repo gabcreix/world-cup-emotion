@@ -2,8 +2,12 @@
 Bronze layer — FBref match reports.
 
 Descarga el HTML del match report de cada partido finalizado que aún no
-tiene stats (sin fila en stats_equipo), lo guarda en disco (cache) y
-persiste el HTML crudo en bronze.fbref_match_report_raw.
+tiene un registro en bronze.fbref_match_report_raw, lo guarda en disco
+(cache) y persiste el HTML crudo en dicha tabla.
+
+Es independiente de gold: si gold necesita reprocesar un partido (p.ej.
+se borró stats_equipo), reutiliza el HTML ya presente en bronze sin
+volver a descargarlo.
 
 Reutiliza el driver/caché de world_cup.pipelines.fbref_squads.bronze.
 """
@@ -33,7 +37,7 @@ def _load_pendientes(cur) -> list[tuple[int, str]]:
         WHERE p.estado = 'finalizado'
           AND p.match_report_url IS NOT NULL
           AND NOT EXISTS (
-              SELECT 1 FROM stats_equipo se WHERE se.partido_id = p.partido_id
+              SELECT 1 FROM bronze.fbref_match_report_raw r WHERE r.partido_id = p.partido_id
           )
         ORDER BY p.partido_id
         """
