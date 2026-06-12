@@ -3,9 +3,27 @@ Gold layer — Ingesta de noticias vía RSS.
 
 Lee silver.news_item (es_valido = true) y hace upsert en public.noticia.
 Idempotente: si la url ya existe, no se duplica.
+
+Deduplicación adicional por título normalizado (titulo_hash): distintas
+fuentes pueden cubrir el mismo evento con URLs distintas pero títulos
+equivalentes; en ese caso se descarta la segunda noticia.
 """
 
+import hashlib
+import re
+
 from world_cup import db
+
+
+def _normalizar_titulo(titulo: str) -> str:
+    t = titulo.lower().strip()
+    t = re.sub(r"[^a-záéíóúüñ0-9\s]", "", t)
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+
+def _hash_titulo(titulo: str) -> str:
+    return hashlib.sha256(_normalizar_titulo(titulo).encode()).hexdigest()
 
 
 def _load_silver_items(cur, run_id: str) -> list[dict]:
@@ -28,14 +46,16 @@ def run(run_id: str) -> None:
 
             creados = 0
             for it in items:
+                it["titulo_hash"] = _hash_titulo(it["titulo"])
                 cur.execute(
                     """
                     INSERT INTO noticia (
-                        fuente_id, titulo, url, idioma, resumen, fecha_publicacion
+                        fuente_id, titulo, url, idioma, resumen, fecha_publicacion, titulo_hash
                     ) VALUES (
-                        %(fuente_id)s, %(titulo)s, %(url)s, %(idioma)s, %(resumen)s, %(fecha_publicacion)s
+                        %(fuente_id)s, %(titulo)s, %(url)s, %(idioma)s, %(resumen)s,
+                        %(fecha_publicacion)s, %(titulo_hash)s
                     )
-                    ON CONFLICT (url) DO NOTHING
+                    ON CONFLICT DO NOTHING
                     """,
                     it,
                 )
