@@ -71,6 +71,7 @@ def invictos(cur, edicion_id: int) -> dict | None:
     return {
         "titulo": f"Selecciones invictas tras {max_pj} partidos: {nombres}",
         "tipo": "racha",
+        "fuente_datos": "torneo_actual",
         "score_relevancia": min(1.0, 0.3 + 0.15 * max_pj),
         "entidades_json": [{"tipo": "seleccion", "id": f["seleccion_id"]} for f in lideres],
         "contexto": {
@@ -119,6 +120,7 @@ def goleadores(cur, edicion_id: int) -> dict | None:
     return {
         "titulo": f"Máximo goleador del torneo ({max_goles} goles): {nombres}",
         "tipo": "estadistica",
+        "fuente_datos": "torneo_actual",
         "score_relevancia": min(1.0, 0.3 + 0.15 * max_goles),
         "entidades_json": [{"tipo": "jugador", "id": f["jugador_id"]} for f in lideres],
         "contexto": {
@@ -169,6 +171,7 @@ def partido_mas_goles(cur, edicion_id: int) -> dict | None:
             f"{p['goles_visitante']} {p['visitante']} ({p['total_goles']} goles)"
         ),
         "tipo": "estadistica",
+        "fuente_datos": "torneo_actual",
         "score_relevancia": min(1.0, 0.2 + 0.1 * p["total_goles"]),
         "entidades_json": [{"tipo": "partido", "id": p["partido_id"]}],
         "contexto": {
@@ -214,6 +217,7 @@ def mejor_posesion(cur, edicion_id: int) -> dict | None:
     return {
         "titulo": f"Mejor posesión media del torneo: {f['nombre']} ({float(f['posesion_media']):.1f}%)",
         "tipo": "estadistica",
+        "fuente_datos": "torneo_actual",
         "score_relevancia": 0.5,
         "entidades_json": [{"tipo": "seleccion", "id": f["seleccion_id"]}],
         "contexto": {
@@ -259,6 +263,7 @@ def grupo_mas_goleador(cur, edicion_id: int) -> dict | None:
             f"({float(f['media_goles']):.2f} goles/partido en {f['partidos']} partidos)"
         ),
         "tipo": "curiosidad",
+        "fuente_datos": "torneo_actual",
         "score_relevancia": 0.4,
         "entidades_json": [{"tipo": "grupo", "id": f["grupo_id"]}],
         "contexto": {

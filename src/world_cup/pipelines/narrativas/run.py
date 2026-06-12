@@ -16,7 +16,7 @@ import json
 from openai import OpenAI
 
 from world_cup import db
-from world_cup.pipelines.narrativas import analiticas
+from world_cup.pipelines.narrativas import analiticas, historico
 
 MODELO_LLM = "gpt-4o-mini"
 SYSTEM_PROMPT = """
@@ -59,7 +59,7 @@ def _persist(cur, edicion_id: int, candidata: dict, descripcion: str) -> None:
             entidades_json, fuente_datos
         ) VALUES (
             %(edicion_id)s, %(titulo)s, %(tipo)s, %(descripcion)s, %(score_relevancia)s,
-            %(entidades_json)s, 'torneo_actual'
+            %(entidades_json)s, %(fuente_datos)s
         )
         """,
         {
@@ -69,6 +69,7 @@ def _persist(cur, edicion_id: int, candidata: dict, descripcion: str) -> None:
             "descripcion": descripcion,
             "score_relevancia": candidata["score_relevancia"],
             "entidades_json": json.dumps(candidata["entidades_json"]),
+            "fuente_datos": candidata["fuente_datos"],
         },
     )
 
@@ -79,7 +80,7 @@ def run() -> None:
     with db.get_conn() as conn:
         with conn.cursor() as cur:
             edicion_id = analiticas.load_edicion_id(cur)
-            candidatas = analiticas.generar(cur)
+            candidatas = analiticas.generar(cur) + historico.generar(cur, edicion_id)
 
             if not candidatas:
                 print("[INFO] No hay narrativas candidatas a partir de las analíticas.")
