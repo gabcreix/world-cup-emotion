@@ -14,7 +14,8 @@ Variables de entorno (.env):
 
 Idempotencia:
     El HTML generado se guarda en data/emails/YYYY-MM-DD.html. Si el
-    fichero ya existe, no se vuelve a generar ni enviar.
+    fichero se regenera en cada ejecución. El envío del email se controla
+    con data/emails/YYYY-MM-DD.sent: si existe, no se reenvía.
 
 Solo se envía si hay partidos con estado='finalizado' en la fecha del
 informe.
@@ -453,9 +454,7 @@ def run(fecha: datetime.date | None = None, enviar: bool = True) -> Path | None:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_file = OUT_DIR / f"{fecha.isoformat()}.html"
-    if out_file.exists():
-        print(f"[INFO] Ya existe {out_file} — informe no regenerado ni reenviado.")
-        return out_file
+    sent_marker = OUT_DIR / f"{fecha.isoformat()}.sent"
 
     with db.get_conn() as conn:
         with conn.cursor() as cur:
@@ -474,8 +473,12 @@ def run(fecha: datetime.date | None = None, enviar: bool = True) -> Path | None:
     print(f"  Informe generado: {out_file}")
 
     if enviar:
-        _enviar_email(fecha, html_body)
-        print(f"  [EMAIL] Enviado a {os.environ.get('EMAIL_RECIPIENT')}")
+        if sent_marker.exists():
+            print(f"[INFO] {sent_marker} ya existe — email no reenviado.")
+        else:
+            _enviar_email(fecha, html_body)
+            sent_marker.write_text("", encoding="utf-8")
+            print(f"  [EMAIL] Enviado a {os.environ.get('EMAIL_RECIPIENT')}")
 
     return out_file
 
