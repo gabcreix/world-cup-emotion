@@ -11,6 +11,7 @@ Variables de entorno (.env):
     EMAIL_SENDER=tu@gmail.com
     EMAIL_PASSWORD=xxxx xxxx xxxx xxxx   # Gmail app password
     EMAIL_RECIPIENT=tu@gmail.com
+    OPENAI_API_KEY=sk-...                # secciones con LLM
 
 Idempotencia:
     El HTML generado se guarda en data/emails/YYYY-MM-DD.html. Si el
@@ -20,25 +21,35 @@ Idempotencia:
 Solo se envía si hay partidos con estado='finalizado' en la fecha del
 informe.
 
-NOTA: esta primera versión cubre las secciones basadas en datos
-(cabecera, resultados, tabla de grupos, preview del día siguiente,
-estadísticas acumuladas). Las secciones con LLM (datos relevantes,
-hecho histórico, noticias destacadas, sentimiento, fuera del campo,
-crónica) se añaden en una segunda iteración.
+Secciones con LLM (datos relevantes, hecho histórico, noticias
+destacadas, fuera del campo, crónica) se omiten silenciosamente si no
+hay datos suficientes o si falla la llamada al modelo, para no bloquear
+el envío de las secciones basadas en datos.
 """
 
 import argparse
 import datetime
 import html
+import json
 import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from openai import OpenAI
+
 from world_cup import db
 
 EDICION_ANYO = 2026
+
+MODELO_LLM = "gpt-4o-mini"
+SYSTEM_PROMPT = """
+Eres un periodista deportivo especializado en fútbol internacional,
+escribiendo para una audiencia hispanohablante global.
+Tono: analítico pero accesible, con datos concretos, en español.
+Evita clichés. Sé preciso y directo.
+"""
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT_DIR = ROOT / "data" / "emails"
@@ -75,6 +86,29 @@ def _marcador(p: dict) -> str:
     return marcador
 
 
+def _llm_text(client: OpenAI, prompt: str) -> str:
+    resp = client.chat.completions.create(
+        model=MODELO_LLM,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return resp.choices[0].message.content.strip()
+
+
+def _llm_json(client: OpenAI, prompt: str) -> dict:
+    resp = client.chat.completions.create(
+        model=MODELO_LLM,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
 # ---------------------------------------------------------------------------
 # Queries
 # ---------------------------------------------------------------------------
@@ -90,7 +124,15 @@ def _resultados_del_dia(cur, fecha: datetime.date) -> list[dict]:
             p.goles_local, p.goles_visitante,
             p.goles_local_prorroga, p.goles_visit_prorroga,
             p.penaltis_local, p.penaltis_visitante,
-            est.ciudad, ae.alias AS estadio_nombre
+            est.ciudad, ae.alias AS estadio_nombre,
+            pal.participacion_id AS local_participacion_id,
+            pav.participacion_id AS visit_participacion_id,
+            sl.seleccion_id AS local_seleccion_id,
+            sv.seleccion_id AS visit_seleccion_id,
+            pl.pais_id AS local_pais_id,
+            pv.pais_id AS visit_pais_id,
+            pal.dt_id AS local_dt_id,
+            pav.dt_id AS visit_dt_id
         FROM partido p
         JOIN edicion e          ON e.edicion_id = p.edicion_id AND e.anyo = %(anyo)s
         JOIN fase f             ON f.fase_id = p.fase_id
@@ -261,6 +303,454 @@ def _stats_acumuladas(cur) -> dict | None:
     }
 
 
+def _equipos_jugaron_hoy(cur, resultados: list[dict]) -> dict:
+    """Identidades de las selecciones/jugadores/DTs que jugaron hoy, para filtrar noticias."""
+    participacion_ids: list[int] = []
+    seleccion_ids: list[int] = []
+    pais_ids: list[int] = []
+    dt_ids: list[int] = []
+    partido_ids: list[int] = []
+
+    for p in resultados:
+        participacion_ids += [p["local_participacion_id"], p["visit_participacion_id"]]
+        seleccion_ids += [p["local_seleccion_id"], p["visit_seleccion_id"]]
+        pais_ids += [p["local_pais_id"], p["visit_pais_id"]]
+        partido_ids.append(p["partido_id"])
+        for dt_id in (p["local_dt_id"], p["visit_dt_id"]):
+            if dt_id is not None:
+                dt_ids.append(dt_id)
+
+    cur.execute(
+        "SELECT jugador_id FROM convocatoria WHERE participacion_id = ANY(%s)",
+        (participacion_ids,),
+    )
+    jugador_ids = [row[0] for row in cur.fetchall()]
+
+    return {
+        "participacion_ids": participacion_ids,
+        "seleccion_ids": seleccion_ids,
+        "pais_ids": pais_ids,
+        "dt_ids": dt_ids,
+        "jugador_ids": jugador_ids,
+        "partido_ids": partido_ids,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Datos relevantes del día (sección 4 — LLM)
+# ---------------------------------------------------------------------------
+
+def _datos_relevantes_partido(cur, partido_ids: list[int]) -> dict | None:
+    """Recopila goleadores, stats destacadas y stats de equipo de los partidos de hoy."""
+    if not partido_ids:
+        return None
+
+    cur.execute(
+        """
+        SELECT se.partido_id, p.nombre AS pais, se.xg, se.posesion,
+               se.tiros_totales, se.tiros_a_puerta, se.pases_completados, se.pases_totales,
+               se.corners, se.fueras_de_juego, se.faltas_cometidas
+        FROM stats_equipo se
+        JOIN participacion pa ON pa.participacion_id = se.participacion_id
+        JOIN seleccion s ON s.seleccion_id = pa.seleccion_id
+        JOIN pais p ON p.pais_id = s.pais_id
+        WHERE se.partido_id = ANY(%s)
+        """,
+        (partido_ids,),
+    )
+    cols = [c.name for c in cur.description]
+    stats_equipo = [dict(zip(cols, row)) for row in cur.fetchall()]
+    if not stats_equipo:
+        return None
+
+    cur.execute(
+        """
+        SELECT e.partido_id, e.tipo, e.minuto, e.minuto_adicional,
+               j.nombre_completo AS jugador, p.nombre AS pais
+        FROM evento_partido e
+        JOIN jugador j ON j.jugador_id = e.jugador_id
+        JOIN participacion pa ON pa.participacion_id = e.participacion_id
+        JOIN seleccion s ON s.seleccion_id = pa.seleccion_id
+        JOIN pais p ON p.pais_id = s.pais_id
+        WHERE e.partido_id = ANY(%s) AND e.tipo IN ('gol', 'gol_penalti', 'gol_propia')
+        ORDER BY e.partido_id, e.minuto
+        """,
+        (partido_ids,),
+    )
+    cols = [c.name for c in cur.description]
+    goles = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT sj.partido_id, j.nombre_completo AS jugador, p.nombre AS pais,
+               sj.nota, sj.minutos_jugados, sj.stats_extra_json,
+               j.posicion AS posicion_jugador
+        FROM stats_jugador sj
+        JOIN jugador j ON j.jugador_id = sj.jugador_id
+        JOIN participacion pa ON pa.participacion_id = sj.participacion_id
+        JOIN seleccion s ON s.seleccion_id = pa.seleccion_id
+        JOIN pais p ON p.pais_id = s.pais_id
+        WHERE sj.partido_id = ANY(%s) AND sj.nota IS NOT NULL
+        ORDER BY sj.nota DESC
+        LIMIT 8
+        """,
+        (partido_ids,),
+    )
+    cols = [c.name for c in cur.description]
+    destacados = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    return {
+        "stats_equipo": stats_equipo,
+        "goles": goles,
+        "jugadores_destacados": destacados,
+    }
+
+
+def _render_datos_relevantes(client: OpenAI, datos: dict | None) -> str:
+    if not datos:
+        return ""
+
+    payload = json.dumps(datos, default=str, ensure_ascii=False)
+    prompt = (
+        "A partir de estos datos en JSON de los partidos del Mundial 2026 jugados hoy "
+        "(stats de equipo, goles y jugadores más destacados por nota), redacta un breve "
+        "apartado en HTML titulado 'Datos relevantes del día'. Destaca a los goleadores, "
+        "al jugador con mejor nota (portero o no) y una estadística curiosa (posesión, "
+        "tiros, xG, etc.). Usa una lista <ul><li> con 3-5 puntos, sin introducción ni "
+        "encabezado <h2>. No inventes datos que no estén en el JSON.\n\n"
+        f"Datos:\n{payload}"
+    )
+
+    try:
+        cuerpo = _llm_text(client, prompt)
+    except Exception as exc:
+        print(f"[WARN] Sección 'Datos relevantes' omitida (error LLM): {exc}")
+        return ""
+
+    return f"<h2>📊 Datos relevantes del día</h2>{cuerpo}"
+
+
+# ---------------------------------------------------------------------------
+# Hecho histórico del día (sección 5 — LLM)
+# ---------------------------------------------------------------------------
+
+def _hecho_historico(cur, resultados: list[dict]) -> dict | None:
+    """Busca precedentes históricos para los emparejamientos de hoy."""
+    precedentes = []
+    pais_ids: set[int] = set()
+
+    for p in resultados:
+        local_id, visit_id = p["local_pais_id"], p["visit_pais_id"]
+        pais_ids.update({local_id, visit_id})
+        cur.execute(
+            """
+            SELECT hr.fase, pl.nombre AS local, pv.nombre AS visitante,
+                   hr.goles_local, hr.goles_visitante,
+                   hr.goles_local_prorroga, hr.goles_visit_prorroga,
+                   hr.penaltis_local, hr.penaltis_visitante,
+                   hr.fecha, he.anyo
+            FROM historico_resultado hr
+            JOIN historico_edicion he ON he.historico_edicion_id = hr.historico_edicion_id
+            JOIN pais pl ON pl.pais_id = hr.pais_local_id
+            JOIN pais pv ON pv.pais_id = hr.pais_visitante_id
+            WHERE (hr.pais_local_id = %(local)s AND hr.pais_visitante_id = %(visit)s)
+               OR (hr.pais_local_id = %(visit)s AND hr.pais_visitante_id = %(local)s)
+            ORDER BY he.anyo
+            """,
+            {"local": local_id, "visit": visit_id},
+        )
+        cols = [c.name for c in cur.description]
+        enfrentamientos = [dict(zip(cols, row)) for row in cur.fetchall()]
+        if enfrentamientos:
+            precedentes.append({
+                "local_hoy": p["local"],
+                "visitante_hoy": p["visitante"],
+                "resultado_hoy": _marcador(p),
+                "enfrentamientos_previos": enfrentamientos,
+            })
+
+    if not pais_ids:
+        return None
+
+    cur.execute(
+        """
+        SELECT hr.tipo, hr.valor, hr.descripcion, p.nombre AS pais, he.anyo
+        FROM historico_record hr
+        LEFT JOIN pais p ON p.pais_id = hr.pais_id
+        LEFT JOIN historico_edicion he ON he.historico_edicion_id = hr.historico_edicion_id
+        WHERE hr.pais_id = ANY(%s)
+        """,
+        (list(pais_ids),),
+    )
+    cols = [c.name for c in cur.description]
+    records = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    if not precedentes and not records:
+        return None
+
+    return {"precedentes": precedentes, "records": records}
+
+
+def _render_hecho_historico(client: OpenAI, datos: dict | None) -> str:
+    if not datos:
+        return ""
+
+    payload = json.dumps(datos, default=str, ensure_ascii=False)
+    prompt = (
+        "A partir de estos datos en JSON sobre precedentes históricos de Mundiales "
+        "para los partidos de hoy del Mundial 2026, escribe UNA sola frase en español "
+        "que conecte el resultado de hoy con ese histórico (un enfrentamiento previo "
+        "destacado o un récord relevante). Si nada resulta realmente interesante, "
+        "responde exactamente con la palabra OMITIR. Devuelve solo la frase (o "
+        "'OMITIR'), sin comillas ni etiquetas HTML.\n\n"
+        f"Datos:\n{payload}"
+    )
+
+    try:
+        frase = _llm_text(client, prompt)
+    except Exception as exc:
+        print(f"[WARN] Sección 'Hecho histórico' omitida (error LLM): {exc}")
+        return ""
+
+    if not frase or frase.strip().upper().startswith("OMITIR"):
+        return ""
+
+    return f"<h2>📜 Hecho histórico del día</h2><p>{html.escape(frase)}</p>"
+
+
+# ---------------------------------------------------------------------------
+# Noticias destacadas (sección 6 — LLM para la intro)
+# ---------------------------------------------------------------------------
+
+def _noticias_destacadas(cur, fecha: datetime.date, equipos: dict) -> list[dict]:
+    cur.execute(
+        """
+        SELECT DISTINCT n.noticia_id, n.titulo, n.url, n.resumen, n.relevancia,
+               n.fecha_ingestion, f.nombre AS fuente_nombre
+        FROM noticia n
+        JOIN fuente f ON f.fuente_id = n.fuente_id
+        JOIN mencion m ON m.noticia_id = n.noticia_id
+        WHERE n.fecha_ingestion::date = %(fecha)s
+          AND (
+                (m.entidad_tipo = 'seleccion' AND m.entidad_id = ANY(%(seleccion_ids)s))
+             OR (m.entidad_tipo = 'jugador'   AND m.entidad_id = ANY(%(jugador_ids)s))
+             OR (m.entidad_tipo = 'dt'        AND m.entidad_id = ANY(%(dt_ids)s))
+             OR (m.entidad_tipo = 'partido'   AND m.entidad_id = ANY(%(partido_ids)s))
+          )
+        ORDER BY n.relevancia DESC NULLS LAST, n.fecha_ingestion DESC
+        LIMIT 10
+        """,
+        {
+            "fecha": fecha,
+            "seleccion_ids": equipos["seleccion_ids"],
+            "jugador_ids": equipos["jugador_ids"],
+            "dt_ids": equipos["dt_ids"],
+            "partido_ids": equipos["partido_ids"],
+        },
+    )
+    cols = [c.name for c in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _render_noticias_destacadas(client: OpenAI, noticias: list[dict]) -> str:
+    if not noticias:
+        return ""
+
+    titulos = [n["titulo"] for n in noticias]
+    prompt = (
+        "Aquí tienes los titulares de las noticias más destacadas de hoy sobre el "
+        "Mundial 2026, relacionadas con los equipos que han jugado:\n\n"
+        + "\n".join(f"- {t}" for t in titulos)
+        + "\n\nEscribe un párrafo introductorio breve (2-3 frases) en español que "
+        "resuma de qué hablan estas noticias, sin enumerar cada titular literalmente. "
+        "Devuelve solo el texto del párrafo, sin etiquetas HTML."
+    )
+
+    try:
+        intro = _llm_text(client, prompt)
+    except Exception as exc:
+        print(f"[WARN] Sección 'Noticias destacadas' sin intro (error LLM): {exc}")
+        intro = ""
+
+    filas = []
+    for n in noticias:
+        titulo = html.escape(n["titulo"])
+        url = html.escape(n["url"], quote=True)
+        fuente = html.escape(n["fuente_nombre"])
+        filas.append(
+            f'<li><a href="{url}" target="_blank">{titulo}</a> '
+            f'<span class="meta-fuente">— {fuente}</span></li>'
+        )
+
+    intro_html = f"<p>{html.escape(intro)}</p>" if intro else ""
+    return f"<h2>📰 Noticias destacadas</h2>{intro_html}<ul class=\"noticias\">{''.join(filas)}</ul>"
+
+
+# ---------------------------------------------------------------------------
+# Sentimiento de prensa (sección 7 — datos, sin LLM)
+# ---------------------------------------------------------------------------
+
+def _sentimiento_prensa(cur, equipos: dict) -> list[dict]:
+    if not equipos["seleccion_ids"]:
+        return []
+
+    cur.execute(
+        """
+        SELECT p.nombre AS pais, p.codigo_iso2,
+               COUNT(*) FILTER (WHERE m.sentimiento = 'positivo') AS positivas,
+               COUNT(*) FILTER (WHERE m.sentimiento = 'negativo') AS negativas,
+               COUNT(*) FILTER (WHERE m.sentimiento = 'neutro')   AS neutras,
+               COUNT(*) AS total
+        FROM mencion m
+        JOIN noticia n ON n.noticia_id = m.noticia_id
+        JOIN seleccion s ON s.seleccion_id = m.entidad_id
+        JOIN pais p ON p.pais_id = s.pais_id
+        WHERE m.entidad_tipo = 'seleccion'
+          AND m.entidad_id = ANY(%s)
+          AND m.sentimiento IS NOT NULL
+          AND n.fecha_ingestion >= NOW() - INTERVAL '24 hours'
+        GROUP BY p.nombre, p.codigo_iso2
+        ORDER BY total DESC
+        """,
+        (equipos["seleccion_ids"],),
+    )
+    cols = [c.name for c in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _render_sentimiento_prensa(sentimiento: list[dict]) -> str:
+    if not sentimiento:
+        return ""
+
+    filas = []
+    for s in sentimiento:
+        conteos = {"positivo": s["positivas"], "negativo": s["negativas"], "neutro": s["neutras"]}
+        dominante = max(conteos, key=conteos.get)
+        emoji = {"positivo": "🟢", "negativo": "🔴", "neutro": "⚪"}[dominante]
+        filas.append(
+            f"<tr><td class=\"equipo\">{_flag(s['codigo_iso2'])} {html.escape(s['pais'])}</td>"
+            f"<td class=\"tono\">{emoji}</td>"
+            f"<td class=\"meta\">{s['total']} mención{'es' if s['total'] != 1 else ''}</td></tr>"
+        )
+
+    return f"""
+    <h2>🗞️ Sentimiento de prensa</h2>
+    <table class="sentimiento">
+      {''.join(filas)}
+    </table>
+    """
+
+
+# ---------------------------------------------------------------------------
+# Lo más destacado fuera del campo (sección 8 — LLM)
+# ---------------------------------------------------------------------------
+
+def _noticias_fuera_de_campo(cur, fecha: datetime.date, equipos: dict) -> list[dict]:
+    cur.execute(
+        """
+        SELECT n.noticia_id, n.titulo, n.url, n.resumen, f.nombre AS fuente_nombre
+        FROM noticia n
+        JOIN fuente f ON f.fuente_id = n.fuente_id
+        WHERE n.fecha_ingestion::date = %(fecha)s
+          AND NOT EXISTS (
+              SELECT 1 FROM mencion m
+              WHERE m.noticia_id = n.noticia_id
+                AND (
+                      (m.entidad_tipo = 'seleccion' AND m.entidad_id = ANY(%(seleccion_ids)s))
+                   OR (m.entidad_tipo = 'partido'   AND m.entidad_id = ANY(%(partido_ids)s))
+                )
+          )
+        ORDER BY n.relevancia DESC NULLS LAST, n.fecha_ingestion DESC
+        LIMIT 15
+        """,
+        {
+            "fecha": fecha,
+            "seleccion_ids": equipos["seleccion_ids"],
+            "partido_ids": equipos["partido_ids"],
+        },
+    )
+    cols = [c.name for c in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _render_fuera_de_campo(client: OpenAI, noticias: list[dict]) -> str:
+    if not noticias:
+        return ""
+
+    items = [{"id": n["noticia_id"], "titulo": n["titulo"], "resumen": n["resumen"]} for n in noticias]
+    prompt = (
+        "A partir de esta lista de noticias en JSON sobre el Mundial 2026 (no "
+        "relacionadas directamente con los partidos de hoy), elige las 3 o 4 más "
+        "interesantes para una sección 'Lo más destacado fuera del campo' (lesiones, "
+        "polémicas, historias humanas, etc.) y escribe para cada una un comentario "
+        "breve de 1-2 frases en español. Devuelve SOLO un JSON con este formato: "
+        '{"items": [{"id": <id>, "comentario": "<texto>"}, ...]}\n\n'
+        f"Noticias:\n{json.dumps(items, default=str, ensure_ascii=False)}"
+    )
+
+    try:
+        data = _llm_json(client, prompt)
+    except Exception as exc:
+        print(f"[WARN] Sección 'Fuera del campo' omitida (error LLM): {exc}")
+        return ""
+
+    by_id = {n["noticia_id"]: n for n in noticias}
+    filas = []
+    for item in data.get("items", []):
+        n = by_id.get(item.get("id"))
+        if not n:
+            continue
+        titulo = html.escape(n["titulo"])
+        url = html.escape(n["url"], quote=True)
+        comentario = html.escape(item.get("comentario", ""))
+        filas.append(
+            f'<li><a href="{url}" target="_blank">{titulo}</a><br>'
+            f'<span class="comentario">{comentario}</span></li>'
+        )
+
+    if not filas:
+        return ""
+
+    return f"<h2>🌍 Lo más destacado fuera del campo</h2><ul class=\"fuera-campo\">{''.join(filas)}</ul>"
+
+
+# ---------------------------------------------------------------------------
+# Crónica del día (sección 9 — LLM)
+# ---------------------------------------------------------------------------
+
+def _render_cronica(client: OpenAI, fecha: datetime.date, resultados: list[dict],
+                     tablas: dict[str, list[dict]], stats: dict | None) -> str:
+    resumen = {
+        "fecha": fecha.isoformat(),
+        "resultados": [
+            {
+                "local": p["local"], "visitante": p["visitante"],
+                "marcador": _marcador(p), "fase": p["fase"], "grupo": p["grupo"],
+            }
+            for p in resultados
+        ],
+        "tablas_grupos": tablas,
+        "stats_acumuladas": stats,
+    }
+
+    prompt = (
+        "A partir de estos datos en JSON sobre la jornada de hoy del Mundial 2026, "
+        "escribe una crónica de 150-200 palabras en español, con tono periodístico. "
+        "Cuenta qué fue lo más importante de la jornada, qué sorprendió y qué historia "
+        "define el día. Devuelve solo el texto de la crónica en párrafos (puedes usar "
+        "etiquetas <p>), sin encabezado ni título.\n\n"
+        f"Datos:\n{json.dumps(resumen, default=str, ensure_ascii=False)}"
+    )
+
+    try:
+        cuerpo = _llm_text(client, prompt)
+    except Exception as exc:
+        print(f"[WARN] Sección 'Crónica del día' omitida (error LLM): {exc}")
+        return ""
+
+    return f"<h2>✍️ Crónica del día</h2>{cuerpo}"
+
+
 # ---------------------------------------------------------------------------
 # Render HTML
 # ---------------------------------------------------------------------------
@@ -369,7 +859,9 @@ def _render_stats_acumuladas(stats: dict | None) -> str:
 
 
 def _build_html(fecha: datetime.date, resultados: list[dict], tablas: dict[str, list[dict]],
-                 preview: list[dict], stats: dict | None) -> str:
+                 preview: list[dict], stats: dict | None, datos_relevantes: str,
+                 hecho_historico: str, noticias_destacadas: str, sentimiento_prensa: str,
+                 fuera_de_campo: str, cronica: str) -> str:
     fecha_larga = _fecha_larga(fecha)
     num_partidos = len(resultados)
     fases = sorted({r["fase"] for r in resultados})
@@ -382,6 +874,12 @@ def _build_html(fecha: datetime.date, resultados: list[dict], tablas: dict[str, 
     secciones = "".join(filter(None, [
         _render_resultados(resultados),
         _render_tablas_grupos(tablas),
+        datos_relevantes,
+        hecho_historico,
+        noticias_destacadas,
+        sentimiento_prensa,
+        fuera_de_campo,
+        cronica,
         _render_preview(preview, fecha),
         _render_stats_acumuladas(stats),
     ]))
@@ -412,6 +910,14 @@ def _build_html(fecha: datetime.date, resultados: list[dict], tablas: dict[str, 
   table.grupo td:nth-child(2) {{ text-align: left; }}
   table.stats td {{ padding: 4px 0; border-bottom: 1px solid #eee; }}
   table.stats td:last-child {{ text-align: right; }}
+  table.sentimiento td {{ padding: 6px 4px; border-bottom: 1px solid #eee; }}
+  table.sentimiento .equipo {{ font-weight: 600; }}
+  table.sentimiento .tono {{ text-align: center; width: 2.5em; }}
+  table.sentimiento .meta {{ color: #888; font-size: 0.75rem; text-align: right; }}
+  ul.noticias, ul.fuera-campo {{ padding-left: 1.2rem; margin: 0 0 0.6rem; }}
+  ul.noticias li, ul.fuera-campo li {{ margin-bottom: 0.5rem; font-size: 0.9rem; }}
+  .meta-fuente {{ color: #999; font-size: 0.8rem; }}
+  .comentario {{ color: #555; font-size: 0.85rem; }}
 </style>
 </head>
 <body>
@@ -456,6 +962,8 @@ def run(fecha: datetime.date | None = None, enviar: bool = True) -> Path | None:
     out_file = OUT_DIR / f"{fecha.isoformat()}.html"
     sent_marker = OUT_DIR / f"{fecha.isoformat()}.sent"
 
+    client = OpenAI()
+
     with db.get_conn() as conn:
         with conn.cursor() as cur:
             resultados = _resultados_del_dia(cur, fecha)
@@ -468,7 +976,27 @@ def run(fecha: datetime.date | None = None, enviar: bool = True) -> Path | None:
             preview = _preview_dia_siguiente(cur, fecha)
             stats = _stats_acumuladas(cur)
 
-    html_body = _build_html(fecha, resultados, tablas, preview, stats)
+            equipos = _equipos_jugaron_hoy(cur, resultados)
+            partido_ids = equipos["partido_ids"]
+
+            datos_relevantes_raw = _datos_relevantes_partido(cur, partido_ids)
+            hecho_historico_raw = _hecho_historico(cur, resultados)
+            noticias_destacadas_raw = _noticias_destacadas(cur, fecha, equipos)
+            sentimiento_raw = _sentimiento_prensa(cur, equipos)
+            fuera_de_campo_raw = _noticias_fuera_de_campo(cur, fecha, equipos)
+
+    datos_relevantes = _render_datos_relevantes(client, datos_relevantes_raw)
+    hecho_historico = _render_hecho_historico(client, hecho_historico_raw)
+    noticias_destacadas = _render_noticias_destacadas(client, noticias_destacadas_raw)
+    sentimiento_prensa = _render_sentimiento_prensa(sentimiento_raw)
+    fuera_de_campo = _render_fuera_de_campo(client, fuera_de_campo_raw)
+    cronica = _render_cronica(client, fecha, resultados, tablas, stats)
+
+    html_body = _build_html(
+        fecha, resultados, tablas, preview, stats,
+        datos_relevantes, hecho_historico, noticias_destacadas,
+        sentimiento_prensa, fuera_de_campo, cronica,
+    )
     out_file.write_text(html_body, encoding="utf-8")
     print(f"  Informe generado: {out_file}")
 
