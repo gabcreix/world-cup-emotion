@@ -36,8 +36,16 @@ def _load_aliases(cur, entidad_tipo: str) -> list[tuple[str, int]]:
 
 
 def _load_noticias(cur) -> list[tuple[int, str, str | None, str | None]]:
+    """Solo carga noticias que aún no tienen ninguna mención detectada."""
     cur.execute(
-        "SELECT noticia_id, titulo, resumen, texto_completo FROM noticia ORDER BY noticia_id"
+        """
+        SELECT n.noticia_id, n.titulo, n.resumen, n.texto_completo
+        FROM noticia n
+        WHERE NOT EXISTS (
+            SELECT 1 FROM mencion m WHERE m.noticia_id = n.noticia_id
+        )
+        ORDER BY n.noticia_id
+        """
     )
     return cur.fetchall()
 

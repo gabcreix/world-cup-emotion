@@ -276,15 +276,212 @@ def grupo_mas_goleador(cur, edicion_id: int) -> dict | None:
     }
 
 
-GENERADORES = [invictos, goleadores, partido_mas_goles, mejor_posesion, grupo_mas_goleador]
+# ---------------------------------------------------------------------------
+# Vallas invictas
+# ---------------------------------------------------------------------------
+
+def vallas_invictas(cur, edicion_id: int) -> dict | None:
+    cur.execute(
+        """
+        SELECT pa.seleccion_id, p.nombre, COUNT(DISTINCT part.partido_id) AS partidos
+        FROM partido part
+        JOIN participacion pa
+             ON pa.participacion_id IN (part.participacion_local_id, part.participacion_visit_id)
+        JOIN seleccion s ON s.seleccion_id = pa.seleccion_id
+        JOIN pais p ON p.pais_id = s.pais_id
+        WHERE part.edicion_id = %(edicion_id)s AND part.estado = 'finalizado'
+          AND NOT EXISTS (
+              SELECT 1 FROM evento_partido e
+              WHERE e.partido_id = part.partido_id
+                AND e.participacion_id != pa.participacion_id
+                AND e.tipo IN ('gol', 'gol_penalti', 'gol_propia')
+          )
+        GROUP BY pa.seleccion_id, p.nombre
+        HAVING COUNT(DISTINCT part.partido_id) >= 2
+        ORDER BY partidos DESC, p.nombre
+        """,
+        {"edicion_id": edicion_id},
+    )
+
+    cols = [c.name for c in cur.description]
+    filas = [dict(zip(cols, row)) for row in cur.fetchall()]
+    if not filas:
+        return None
+
+    nombres = ", ".join(f["nombre"] for f in filas)
+    max_p = filas[0]["partidos"]
+
+    return {
+        "titulo": f"Porterías a cero en {max_p} partidos: {nombres}",
+        "tipo": "estadistica",
+        "fuente_datos": "torneo_actual",
+        "score_relevancia": min(1.0, 0.35 + 0.15 * max_p),
+        "entidades_json": [{"tipo": "seleccion", "id": f["seleccion_id"]} for f in filas],
+        "contexto": {
+            "tipo_narrativa": "vallas_invictas",
+            "edicion": EDICION_ANYO,
+            "selecciones": [{"nombre": f["nombre"], "partidos": f["partidos"]} for f in filas],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Racha goleadora individual
+# ---------------------------------------------------------------------------
+
+def racha_goleadora_jugador(cur, edicion_id: int) -> dict | None:
+    cur.execute(
+        """
+        WITH goles_por_partido AS (
+            SELECT e.jugador_id, part.partido_id, part.fecha_hora,
+                   ROW_NUMBER() OVER (PARTITION BY e.jugador_id ORDER BY part.fecha_hora) AS rn
+            FROM evento_partido e
+            JOIN partido part ON part.partido_id = e.partido_id
+            WHERE part.edicion_id = %(edicion_id)s
+              AND part.estado = 'finalizado'
+              AND e.tipo IN ('gol', 'gol_penalti')
+            GROUP BY e.jugador_id, part.partido_id, part.fecha_hora
+        )
+        SELECT jugador_id, COUNT(*) AS partidos_con_gol
+        FROM goles_por_partido
+        GROUP BY jugador_id
+        HAVING COUNT(*) >= 2
+        ORDER BY partidos_con_gol DESC
+        LIMIT 1
+        """,
+        {"edicion_id": edicion_id},
+    )
+
+    row = cur.fetchone()
+    if not row:
+        return None
+
+    jugador_id, racha = row
+    cur.execute(
+        "SELECT nombre_completo FROM jugador WHERE jugador_id = %s", (jugador_id,)
+    )
+    nombre = cur.fetchone()[0]
+
+    return {
+        "titulo": f"Racha goleadora: {nombre} ha marcado en {racha} partidos consecutivos",
+        "tipo": "racha",
+        "fuente_datos": "torneo_actual",
+        "score_relevancia": min(1.0, 0.4 + 0.15 * racha),
+        "entidades_json": [{"tipo": "jugador", "id": jugador_id}],
+        "contexto": {
+            "tipo_narrativa": "racha_goleadora_jugador",
+            "edicion": EDICION_ANYO,
+            "jugador": nombre,
+            "partidos_con_gol": racha,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Peor defensa del torneo
+# ---------------------------------------------------------------------------
+
+def peor_defensa(cur, edicion_id: int) -> dict | None:
+    cur.execute(
+        """
+        SELECT pa.seleccion_id, p.nombre,
+               SUM(CASE WHEN pa.participacion_id = part.participacion_local_id
+                        THEN part.goles_visitante ELSE part.goles_local END) AS goles_encajados,
+               COUNT(*) AS partidos
+        FROM partido part
+        JOIN participacion pa
+             ON pa.participacion_id IN (part.participacion_local_id, part.participacion_visit_id)
+        JOIN seleccion s ON s.seleccion_id = pa.seleccion_id
+        JOIN pais p ON p.pais_id = s.pais_id
+        WHERE part.edicion_id = %(edicion_id)s AND part.estado = 'finalizado'
+        GROUP BY pa.seleccion_id, p.nombre
+        HAVING COUNT(*) >= 2
+        ORDER BY goles_encajados DESC
+        LIMIT 1
+        """,
+        {"edicion_id": edicion_id},
+    )
+
+    row = cur.fetchone()
+    if not row or row[2] == 0:
+        return None
+
+    cols = ["seleccion_id", "nombre", "goles_encajados", "partidos"]
+    f = dict(zip(cols, row))
+
+    return {
+        "titulo": (
+            f"Defensa más perforada: {f['nombre']} ha encajado "
+            f"{f['goles_encajados']} goles en {f['partidos']} partidos"
+        ),
+        "tipo": "estadistica",
+        "fuente_datos": "torneo_actual",
+        "score_relevancia": min(1.0, 0.2 + 0.1 * f["goles_encajados"]),
+        "entidades_json": [{"tipo": "seleccion", "id": f["seleccion_id"]}],
+        "contexto": {
+            "tipo_narrativa": "peor_defensa",
+            "edicion": EDICION_ANYO,
+            "seleccion": f["nombre"],
+            "goles_encajados": f["goles_encajados"],
+            "partidos": f["partidos"],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Score según fase del torneo
+# ---------------------------------------------------------------------------
+
+_FASE_MULTIPLIER: dict[str, float] = {
+    "GRP": 1.0,
+    "R32": 1.2,
+    "R16": 1.4,
+    "QF": 1.6,
+    "SF": 1.8,
+    "TP": 1.5,
+    "F": 2.0,
+}
+
+
+def _fase_actual(cur, edicion_id: int) -> str:
+    """Devuelve el código de la fase más avanzada con partidos finalizados."""
+    cur.execute(
+        """
+        SELECT f.codigo
+        FROM partido p
+        JOIN fase f ON f.fase_id = p.fase_id
+        WHERE p.edicion_id = %s AND p.estado = 'finalizado'
+        ORDER BY f.orden DESC
+        LIMIT 1
+        """,
+        (edicion_id,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else "GRP"
+
+
+GENERADORES = [
+    invictos,
+    goleadores,
+    partido_mas_goles,
+    mejor_posesion,
+    grupo_mas_goleador,
+    vallas_invictas,
+    racha_goleadora_jugador,
+    peor_defensa,
+]
 
 
 def generar(cur) -> list[dict]:
     """Ejecuta todas las analíticas y devuelve las narrativas candidatas (sin persistir)."""
     edicion_id = load_edicion_id(cur)
+    fase = _fase_actual(cur, edicion_id)
+    multiplicador = _FASE_MULTIPLIER.get(fase, 1.0)
+
     candidatas = []
     for generador in GENERADORES:
         candidata = generador(cur, edicion_id)
         if candidata:
+            candidata["score_relevancia"] = min(1.0, candidata["score_relevancia"] * multiplicador)
             candidatas.append(candidata)
     return candidatas

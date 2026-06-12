@@ -83,7 +83,7 @@ def run() -> None:
             candidatas = (
                 analiticas.generar(cur)
                 + historico.generar(cur, edicion_id)
-                + clustering.generar(cur, edicion_id)
+                + clustering.generar(cur, edicion_id, client)
             )
 
             if not candidatas:

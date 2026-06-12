@@ -6,7 +6,7 @@ Uso:
 
 Cadencia:
     - Cada 2 horas: fixtures -> stats de partido -> cadena de noticias
-      (news_rss -> fulltext -> embeddings -> menciones -> sentimiento)
+      (news_rss -> fulltext -> embeddings -> menciones -> sentimiento -> narrativas)
     - Diario a las 15:00: informe diario por email
 
 Logging:
@@ -27,6 +27,8 @@ from world_cup.pipelines.embeddings import run as embeddings_run
 from world_cup.pipelines.fbref_fixtures import run as fbref_fixtures_run
 from world_cup.pipelines.fbref_match_stats import run as fbref_match_stats_run
 from world_cup.pipelines.menciones import run as menciones_run
+from world_cup.pipelines.menciones import sentimiento as sentimiento_run
+from world_cup.pipelines.narrativas import run as narrativas_run
 from world_cup.pipelines.news_rss import run as news_rss_run
 from world_cup.reports import email_diario
 
@@ -61,12 +63,14 @@ def _run_safe(nombre: str, func, *args, **kwargs) -> None:
 # ---------------------------------------------------------------------------
 
 def run_ciclo_datos() -> None:
-    """Fixtures -> stats de partido -> cadena de noticias. Cada 2h."""
+    """Fixtures -> stats -> cadena de noticias -> narrativas. Cada 2h."""
     _run_safe("fbref_fixtures", fbref_fixtures_run.main)
     _run_safe("fbref_match_stats", fbref_match_stats_run.main)
     _run_safe("news_rss", news_rss_run.main)
     _run_safe("embeddings", embeddings_run.run)
     _run_safe("menciones", menciones_run.run)
+    _run_safe("sentimiento", sentimiento_run.run)
+    _run_safe("narrativas", narrativas_run.run)
 
 
 def run_email_diario() -> None:

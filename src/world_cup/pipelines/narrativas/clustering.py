@@ -37,6 +37,21 @@ def _nombre_entidad(cur, entidad_tipo: str, entidad_id: int) -> str | None:
     return row[0] if row else None
 
 
+def _titulo_cluster_llm(client, titulares: list[str]) -> str:
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content":
+                "Resume en una frase corta (máx. 12 palabras) el tema común "
+                "de estos titulares de noticias del Mundial 2026:\n"
+                + "\n".join(f"- {t}" for t in titulares)
+            }],
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return f"Tema emergente: {len(titulares)} noticias relacionadas"
+
+
 def _entidad_principal(cur, noticia_ids: list[int]) -> tuple[str, int] | None:
     cur.execute(
         """
@@ -96,7 +111,7 @@ def _clusters_recientes(cur) -> list[list[int]]:
     return [miembros for miembros in grupos.values() if len(miembros) >= MIN_NOTICIAS]
 
 
-def temas_emergentes(cur, edicion_id: int) -> list[dict]:
+def temas_emergentes(cur, edicion_id: int, client=None) -> list[dict]:
     candidatas = []
     hoy = datetime.date.today().isoformat()
 
@@ -118,7 +133,10 @@ def temas_emergentes(cur, edicion_id: int) -> list[dict]:
             if nombre:
                 entidades_json.append({"tipo": entidad_tipo, "id": entidad_id})
 
-        if nombre:
+        if client:
+            tema = _titulo_cluster_llm(client, titulares)
+            titulo = f"Tema emergente en la prensa: {tema} ({n} noticias, {hoy})"
+        elif nombre:
             titulo = f"Tema emergente en la prensa: {n} noticias citan a {nombre} ({hoy})"
         else:
             titulo = f"Tema emergente en la prensa del Mundial 2026: {n} noticias relacionadas ({hoy})"
@@ -144,9 +162,9 @@ def temas_emergentes(cur, edicion_id: int) -> list[dict]:
 GENERADORES = [temas_emergentes]
 
 
-def generar(cur, edicion_id: int) -> list[dict]:
+def generar(cur, edicion_id: int, client=None) -> list[dict]:
     """Ejecuta el clustering de embeddings y devuelve las narrativas candidatas (sin persistir)."""
     candidatas = []
     for generador in GENERADORES:
-        candidatas.extend(generador(cur, edicion_id))
+        candidatas.extend(generador(cur, edicion_id, client))
     return candidatas

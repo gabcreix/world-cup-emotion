@@ -33,6 +33,7 @@ import html
 import json
 import os
 import smtplib
+from concurrent.futures import ThreadPoolExecutor
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -65,8 +66,19 @@ MESES_ES = [
 # Helpers
 # ---------------------------------------------------------------------------
 
+FLAG_OVERRIDES = {
+    "GB-SCT": "🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+    "GB-ENG": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+    "GB-WLS": "🏴󠁧󠁢󠁷󠁬󠁳󠁿",
+}
+
+
 def _flag(codigo_iso2: str | None) -> str:
-    if not codigo_iso2 or len(codigo_iso2) != 2:
+    if not codigo_iso2:
+        return ""
+    if codigo_iso2 in FLAG_OVERRIDES:
+        return FLAG_OVERRIDES[codigo_iso2]
+    if len(codigo_iso2) != 2:
         return ""
     return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in codigo_iso2.upper())
 
@@ -718,6 +730,51 @@ def _render_fuera_de_campo(client: OpenAI, noticias: list[dict]) -> str:
 # Crónica del día (sección 9 — LLM)
 # ---------------------------------------------------------------------------
 
+def _narrativas_del_dia(cur, fecha: datetime.date) -> list[dict]:
+    cur.execute(
+        """
+        SELECT titulo, tipo, descripcion, score_relevancia
+        FROM narrativa
+        WHERE creado_en::date = %s
+          AND publicada = FALSE
+        ORDER BY score_relevancia DESC
+        LIMIT 5
+        """,
+        (fecha,),
+    )
+    cols = [c.name for c in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _render_narrativas(narrativas: list[dict]) -> str:
+    if not narrativas:
+        return ""
+
+    TIPO_EMOJI = {
+        "estadistica": "📊",
+        "racha": "🔥",
+        "comparativa": "⚖️",
+        "hito": "🏅",
+        "curiosidad": "💡",
+    }
+
+    items = []
+    for n in narrativas:
+        emoji = TIPO_EMOJI.get(n["tipo"], "📌")
+        titulo = html.escape(n["titulo"])
+        desc = html.escape(n["descripcion"] or "")
+        items.append(
+            f"<li><b>{emoji} {titulo}</b>"
+            + (f"<br><span class='comentario'>{desc}</span>" if desc else "")
+            + "</li>"
+        )
+
+    return (
+        "<h2>💡 Narrativas del día</h2>"
+        f"<ul class='narrativas'>{''.join(items)}</ul>"
+    )
+
+
 def _render_cronica(client: OpenAI, fecha: datetime.date, resultados: list[dict],
                      tablas: dict[str, list[dict]], stats: dict | None) -> str:
     resumen = {
@@ -860,8 +917,8 @@ def _render_stats_acumuladas(stats: dict | None) -> str:
 
 def _build_html(fecha: datetime.date, resultados: list[dict], tablas: dict[str, list[dict]],
                  preview: list[dict], stats: dict | None, datos_relevantes: str,
-                 hecho_historico: str, noticias_destacadas: str, sentimiento_prensa: str,
-                 fuera_de_campo: str, cronica: str) -> str:
+                 hecho_historico: str, narrativas: str, noticias_destacadas: str,
+                 sentimiento_prensa: str, fuera_de_campo: str, cronica: str) -> str:
     fecha_larga = _fecha_larga(fecha)
     num_partidos = len(resultados)
     fases = sorted({r["fase"] for r in resultados})
@@ -876,6 +933,7 @@ def _build_html(fecha: datetime.date, resultados: list[dict], tablas: dict[str, 
         _render_tablas_grupos(tablas),
         datos_relevantes,
         hecho_historico,
+        narrativas,
         noticias_destacadas,
         sentimiento_prensa,
         fuera_de_campo,
@@ -916,6 +974,8 @@ def _build_html(fecha: datetime.date, resultados: list[dict], tablas: dict[str, 
   table.sentimiento .meta {{ color: #888; font-size: 0.75rem; text-align: right; }}
   ul.noticias, ul.fuera-campo {{ padding-left: 1.2rem; margin: 0 0 0.6rem; }}
   ul.noticias li, ul.fuera-campo li {{ margin-bottom: 0.5rem; font-size: 0.9rem; }}
+  ul.narrativas {{ padding-left: 1.2rem; margin: 0 0 0.6rem; }}
+  ul.narrativas li {{ margin-bottom: 0.7rem; font-size: 0.9rem; }}
   .meta-fuente {{ color: #999; font-size: 0.8rem; }}
   .comentario {{ color: #555; font-size: 0.85rem; }}
 </style>
@@ -981,20 +1041,30 @@ def run(fecha: datetime.date | None = None, enviar: bool = True) -> Path | None:
 
             datos_relevantes_raw = _datos_relevantes_partido(cur, partido_ids)
             hecho_historico_raw = _hecho_historico(cur, resultados)
+            narrativas_raw = _narrativas_del_dia(cur, fecha)
             noticias_destacadas_raw = _noticias_destacadas(cur, fecha, equipos)
             sentimiento_raw = _sentimiento_prensa(cur, equipos)
             fuera_de_campo_raw = _noticias_fuera_de_campo(cur, fecha, equipos)
 
-    datos_relevantes = _render_datos_relevantes(client, datos_relevantes_raw)
-    hecho_historico = _render_hecho_historico(client, hecho_historico_raw)
-    noticias_destacadas = _render_noticias_destacadas(client, noticias_destacadas_raw)
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        f_datos = ex.submit(_render_datos_relevantes, client, datos_relevantes_raw)
+        f_historico = ex.submit(_render_hecho_historico, client, hecho_historico_raw)
+        f_noticias = ex.submit(_render_noticias_destacadas, client, noticias_destacadas_raw)
+        f_fuera = ex.submit(_render_fuera_de_campo, client, fuera_de_campo_raw)
+        f_cronica = ex.submit(_render_cronica, client, fecha, resultados, tablas, stats)
+
+        datos_relevantes = f_datos.result()
+        hecho_historico = f_historico.result()
+        noticias_destacadas = f_noticias.result()
+        fuera_de_campo = f_fuera.result()
+        cronica = f_cronica.result()
+
+    narrativas = _render_narrativas(narrativas_raw)
     sentimiento_prensa = _render_sentimiento_prensa(sentimiento_raw)
-    fuera_de_campo = _render_fuera_de_campo(client, fuera_de_campo_raw)
-    cronica = _render_cronica(client, fecha, resultados, tablas, stats)
 
     html_body = _build_html(
         fecha, resultados, tablas, preview, stats,
-        datos_relevantes, hecho_historico, noticias_destacadas,
+        datos_relevantes, hecho_historico, narrativas, noticias_destacadas,
         sentimiento_prensa, fuera_de_campo, cronica,
     )
     out_file.write_text(html_body, encoding="utf-8")
