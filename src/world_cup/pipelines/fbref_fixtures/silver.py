@@ -126,6 +126,7 @@ def _normalize(bronze_id: int, run_id: str, raw: dict, hash_to_fifa: dict[str, s
         "venue_raw":             venue_raw,
         "goles_local":           goles_local,
         "goles_visitante":       goles_visitante,
+        "match_report_url":      raw.get("match_report_url") or None,
         "es_valido":             es_valido,
         "motivo_invalido":       "; ".join(motivos) or None,
     }
@@ -147,6 +148,7 @@ def _persist_silver(records: list[dict]) -> None:
                         fase_raw, fase_codigo,
                         equipo_local_fifa, equipo_visitante_fifa,
                         venue_raw, goles_local, goles_visitante,
+                        match_report_url,
                         es_valido, motivo_invalido
                     ) VALUES (
                         %(bronze_id)s, %(run_id)s,
@@ -154,6 +156,7 @@ def _persist_silver(records: list[dict]) -> None:
                         %(fase_raw)s, %(fase_codigo)s,
                         %(equipo_local_fifa)s, %(equipo_visitante_fifa)s,
                         %(venue_raw)s, %(goles_local)s, %(goles_visitante)s,
+                        %(match_report_url)s,
                         %(es_valido)s, %(motivo_invalido)s
                     )
                     """,

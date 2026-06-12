@@ -59,7 +59,7 @@ def _load_silver_fixtures(cur, run_id: str | None) -> list[dict]:
             """
             SELECT fecha, hora_local, fase_codigo,
                    equipo_local_fifa, equipo_visitante_fifa,
-                   venue_raw, goles_local, goles_visitante
+                   venue_raw, goles_local, goles_visitante, match_report_url
             FROM silver.fbref_fixture
             WHERE run_id = %s AND es_valido = true
             """,
@@ -71,7 +71,7 @@ def _load_silver_fixtures(cur, run_id: str | None) -> list[dict]:
             SELECT DISTINCT ON (equipo_local_fifa, equipo_visitante_fifa)
                 fecha, hora_local, fase_codigo,
                 equipo_local_fifa, equipo_visitante_fifa,
-                venue_raw, goles_local, goles_visitante
+                venue_raw, goles_local, goles_visitante, match_report_url
             FROM silver.fbref_fixture
             WHERE es_valido = true
             ORDER BY equipo_local_fifa, equipo_visitante_fifa, procesado_en DESC
@@ -84,7 +84,8 @@ def _load_silver_fixtures(cur, run_id: str | None) -> list[dict]:
 def _upsert_partido(cur, edicion_id: int, fase_id: int, grupo_id: int | None,
                      estadio_id: int | None, participacion_local_id: int,
                      participacion_visit_id: int, fecha_hora, estado: str,
-                     goles_local: int | None, goles_visitante: int | None) -> bool:
+                     goles_local: int | None, goles_visitante: int | None,
+                     match_report_url: str | None) -> bool:
     """Devuelve True si se creó un partido nuevo, False si se actualizó uno existente."""
     cur.execute(
         """
@@ -104,11 +105,12 @@ def _upsert_partido(cur, edicion_id: int, fase_id: int, grupo_id: int | None,
             SET fase_id = %s, grupo_id = %s, estadio_id = %s,
                 fecha_hora = %s, estado = %s,
                 goles_local = %s, goles_visitante = %s,
+                match_report_url = COALESCE(%s, match_report_url),
                 actualizado_en = NOW()
             WHERE partido_id = %s
             """,
             (fase_id, grupo_id, estadio_id, fecha_hora, estado,
-             goles_local, goles_visitante, row[0]),
+             goles_local, goles_visitante, match_report_url, row[0]),
         )
         return False
 
@@ -117,12 +119,12 @@ def _upsert_partido(cur, edicion_id: int, fase_id: int, grupo_id: int | None,
         INSERT INTO partido (
             edicion_id, fase_id, grupo_id, estadio_id,
             participacion_local_id, participacion_visit_id,
-            fecha_hora, estado, goles_local, goles_visitante
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            fecha_hora, estado, goles_local, goles_visitante, match_report_url
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (edicion_id, fase_id, grupo_id, estadio_id,
          participacion_local_id, participacion_visit_id,
-         fecha_hora, estado, goles_local, goles_visitante),
+         fecha_hora, estado, goles_local, goles_visitante, match_report_url),
     )
     return True
 
@@ -169,6 +171,7 @@ def run(run_id: str | None = None) -> None:
                     cur, edicion_id, fase_id, grupo_id, estadio_id,
                     participacion_local_id, participacion_visit_id,
                     fecha_hora, estado, f["goles_local"], f["goles_visitante"],
+                    f["match_report_url"],
                 )
 
                 if creado:
