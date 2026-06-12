@@ -36,7 +36,7 @@ BRONZE_DIR = ROOT / "data" / "bronze" / "fbref_squads"
 BASE_URL = "https://fbref.com"
 TOURNAMENT_URL = f"{BASE_URL}/en/comps/1/2026/2026-FIFA-World-Cup-Stats"
 REQUEST_DELAY = 6.0
-CF_WAIT = 12.0
+CF_WAIT = 25.0
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def _fetch_html(driver: uc.Chrome, url: str) -> str:
         )
     except Exception:
         print(f"  [WARN] Posible timeout de Cloudflare para {url}")
-    time.sleep(3)
+    time.sleep(6)
     return driver.page_source
 
 
