@@ -137,6 +137,10 @@ def _normalize_name(nombre: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", sin_acentos.lower()).strip()
 
 
+def _normalize_compact(nombre: str) -> str:
+    return _normalize_name(nombre).replace(" ", "")
+
+
 def _resolve_jugador_id(cur, jugador_por_alias: dict[str, int],
                          jugadores_por_participacion: dict[int, list[tuple[int, str]]],
                          nombre: str | None, participacion_id: int) -> int | None:
@@ -152,9 +156,13 @@ def _resolve_jugador_id(cur, jugador_por_alias: dict[str, int],
         return None
 
     norm_nombre = _normalize_name(nombre)
+    compact_nombre = _normalize_compact(nombre)
     mejor_id, mejor_score = None, 0.0
     for jid, nombre_completo in candidatos:
-        score = fuzz.token_sort_ratio(norm_nombre, _normalize_name(nombre_completo))
+        score = max(
+            fuzz.token_sort_ratio(norm_nombre, _normalize_name(nombre_completo)),
+            fuzz.ratio(compact_nombre, _normalize_compact(nombre_completo)),
+        )
         if score > mejor_score:
             mejor_id, mejor_score = jid, score
 
