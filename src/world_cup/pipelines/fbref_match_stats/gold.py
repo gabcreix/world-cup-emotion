@@ -24,6 +24,7 @@ from rapidfuzz import fuzz
 from world_cup import db
 from world_cup.fbref_teams import FBREF_NAME_TO_FIFA
 from world_cup.pipelines.fbref_match_stats import silver
+from world_cup.pipelines.fbref_squads.silver import POSITION_MAP
 
 SQUAD_HASH_RE = re.compile(r"/squads/([0-9a-f]{8})/")
 FUZZY_THRESHOLD = 85
@@ -86,6 +87,17 @@ def _load_jugadores_por_participacion(cur) -> dict[int, list[tuple[int, str]]]:
     return mapping
 
 
+def _load_pais_por_participacion(cur) -> dict[int, int]:
+    cur.execute(
+        """
+        SELECT p.participacion_id, s.pais_id
+        FROM participacion p
+        JOIN seleccion s ON s.seleccion_id = p.seleccion_id
+        """
+    )
+    return dict(cur.fetchall())
+
+
 def _load_partido_info(cur, partido_id: int) -> dict | None:
     cur.execute(
         """
@@ -141,9 +153,47 @@ def _normalize_compact(nombre: str) -> str:
     return _normalize_name(nombre).replace(" ", "")
 
 
+def _crear_jugador_desde_fbref(cur, nombre: str, pais_id: int, participacion_id: int,
+                                posicion_fbref: str | None) -> int:
+    """Crea un jugador (y su convocatoria) a partir de un nombre de FBref sin
+    correspondencia en la convocatoria actual (p.ej. convocatorias de última
+    hora no capturadas por fbref_squads)."""
+    posicion, posicion_especifica = POSITION_MAP.get(posicion_fbref, ("centrocampista", None))
+
+    cur.execute(
+        """
+        INSERT INTO jugador (nombre_completo, pais_id, posicion, posicion_especifica)
+        VALUES (%s, %s, %s, %s)
+        RETURNING jugador_id
+        """,
+        (nombre, pais_id, posicion, posicion_especifica),
+    )
+    jugador_id = cur.fetchone()[0]
+
+    cur.execute(
+        """
+        INSERT INTO convocatoria (jugador_id, participacion_id, posicion_convocado)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (jugador_id, participacion_id) DO NOTHING
+        """,
+        (jugador_id, participacion_id, posicion),
+    )
+    cur.execute(
+        """
+        INSERT INTO alias_entidad (entidad_tipo, entidad_id, alias, fuente, idioma, es_canonico)
+        VALUES ('jugador', %s, %s, 'fbref', NULL, TRUE)
+        ON CONFLICT (entidad_tipo, entidad_id, alias) DO NOTHING
+        """,
+        (jugador_id, nombre),
+    )
+    return jugador_id
+
+
 def _resolve_jugador_id(cur, jugador_por_alias: dict[str, int],
                          jugadores_por_participacion: dict[int, list[tuple[int, str]]],
-                         nombre: str | None, participacion_id: int) -> int | None:
+                         pais_por_participacion: dict[int, int],
+                         nombre: str | None, participacion_id: int,
+                         posicion_fbref: str | None = None) -> int | None:
     if not nombre:
         return None
 
@@ -152,34 +202,43 @@ def _resolve_jugador_id(cur, jugador_por_alias: dict[str, int],
         return jugador_id
 
     candidatos = jugadores_por_participacion.get(participacion_id, [])
-    if not candidatos:
-        return None
 
-    norm_nombre = _normalize_name(nombre)
-    compact_nombre = _normalize_compact(nombre)
     mejor_id, mejor_score = None, 0.0
-    for jid, nombre_completo in candidatos:
-        score = max(
-            fuzz.token_sort_ratio(norm_nombre, _normalize_name(nombre_completo)),
-            fuzz.ratio(compact_nombre, _normalize_compact(nombre_completo)),
-        )
-        if score > mejor_score:
-            mejor_id, mejor_score = jid, score
+    if candidatos:
+        norm_nombre = _normalize_name(nombre)
+        compact_nombre = _normalize_compact(nombre)
+        for jid, nombre_completo in candidatos:
+            score = max(
+                fuzz.token_sort_ratio(norm_nombre, _normalize_name(nombre_completo)),
+                fuzz.ratio(compact_nombre, _normalize_compact(nombre_completo)),
+            )
+            if score > mejor_score:
+                mejor_id, mejor_score = jid, score
 
-    if mejor_score < FUZZY_THRESHOLD:
+    if mejor_score >= FUZZY_THRESHOLD:
+        cur.execute(
+            """
+            INSERT INTO alias_entidad (entidad_tipo, entidad_id, alias, fuente, idioma, es_canonico)
+            VALUES ('jugador', %s, %s, 'fbref', NULL, FALSE)
+            ON CONFLICT (entidad_tipo, entidad_id, alias) DO NOTHING
+            """,
+            (mejor_id, nombre),
+        )
+        jugador_por_alias[nombre] = mejor_id
+        jugador_por_alias[nombre.lower()] = mejor_id
+        return mejor_id
+
+    # Sin alias ni fuzzy match: jugador no presente en la convocatoria
+    # (p.ej. fbref_squads no lo capturó). Lo creamos sobre la marcha.
+    pais_id = pais_por_participacion.get(participacion_id)
+    if pais_id is None:
         return None
 
-    cur.execute(
-        """
-        INSERT INTO alias_entidad (entidad_tipo, entidad_id, alias, fuente, idioma, es_canonico)
-        VALUES ('jugador', %s, %s, 'fbref', NULL, FALSE)
-        ON CONFLICT (entidad_tipo, entidad_id, alias) DO NOTHING
-        """,
-        (mejor_id, nombre),
-    )
-    jugador_por_alias[nombre] = mejor_id
-    jugador_por_alias[nombre.lower()] = mejor_id
-    return mejor_id
+    jugador_id = _crear_jugador_desde_fbref(cur, nombre, pais_id, participacion_id, posicion_fbref)
+    jugador_por_alias[nombre] = jugador_id
+    jugador_por_alias[nombre.lower()] = jugador_id
+    jugadores_por_participacion.setdefault(participacion_id, []).append((jugador_id, nombre))
+    return jugador_id
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +248,7 @@ def _resolve_jugador_id(cur, jugador_por_alias: dict[str, int],
 def _persist_eventos(cur, partido_id: int, eventos: list[dict],
                       jugador_por_alias: dict[str, int],
                       jugadores_por_participacion: dict[int, list[tuple[int, str]]],
+                      pais_por_participacion: dict[int, int],
                       participacion_por_lado: dict[str, int]) -> tuple[int, list[str]]:
     cur.execute("DELETE FROM evento_partido WHERE partido_id = %s", (partido_id,))
 
@@ -199,7 +259,7 @@ def _persist_eventos(cur, partido_id: int, eventos: list[dict],
         participacion_id = participacion_por_lado[ev["equipo"]]
 
         jugador_id = _resolve_jugador_id(
-            cur, jugador_por_alias, jugadores_por_participacion,
+            cur, jugador_por_alias, jugadores_por_participacion, pais_por_participacion,
             ev["jugador"]["nombre"], participacion_id,
         )
         if jugador_id is None:
@@ -209,7 +269,7 @@ def _persist_eventos(cur, partido_id: int, eventos: list[dict],
         jugador_rel_id = None
         if ev["jugador_rel"]:
             jugador_rel_id = _resolve_jugador_id(
-                cur, jugador_por_alias, jugadores_por_participacion,
+                cur, jugador_por_alias, jugadores_por_participacion, pais_por_participacion,
                 ev["jugador_rel"]["nombre"], participacion_id,
             )
             if jugador_rel_id is None:
@@ -284,6 +344,7 @@ def run() -> None:
             hash_to_fifa = _build_hash_to_fifa(cur)
             jugador_por_alias = _load_jugador_por_alias(cur)
             jugadores_por_participacion = _load_jugadores_por_participacion(cur)
+            pais_por_participacion = _load_pais_por_participacion(cur)
             pendientes = _load_pendientes(cur)
 
     if not pendientes:
@@ -315,7 +376,7 @@ def run() -> None:
 
                 creados, sm = _persist_eventos(
                     cur, partido_id, datos["eventos"], jugador_por_alias,
-                    jugadores_por_participacion, participacion_por_lado,
+                    jugadores_por_participacion, pais_por_participacion, participacion_por_lado,
                 )
                 eventos_creados += creados
                 sin_match_jugadores.extend(sm)
@@ -328,8 +389,8 @@ def run() -> None:
 
                     for jugador in equipo["jugadores"]:
                         jugador_id = _resolve_jugador_id(
-                            cur, jugador_por_alias, jugadores_por_participacion,
-                            jugador["nombre"], participacion_id,
+                            cur, jugador_por_alias, jugadores_por_participacion, pais_por_participacion,
+                            jugador["nombre"], participacion_id, jugador.get("posicion_fbref"),
                         )
                         if jugador_id is None:
                             sin_match_jugadores.append(jugador["nombre"])
@@ -350,7 +411,7 @@ def run() -> None:
 
     if sin_match_jugadores:
         unicos = sorted(set(sin_match_jugadores))
-        print(f"\n  [WARN] jugadores sin match (ni alias ni fuzzy >= {FUZZY_THRESHOLD}) ({len(unicos)}):")
+        print(f"\n  [WARN] jugadores sin participacion_id resoluble (pais desconocido) ({len(unicos)}):")
         for n in unicos[:20]:
             print(f"    - {n}")
 

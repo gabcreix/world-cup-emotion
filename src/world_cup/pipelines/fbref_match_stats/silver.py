@@ -184,6 +184,7 @@ def _normalize_player(row: dict) -> dict:
     out: dict = {
         "nombre": row.get("player"),
         "fbref_player_id": row.get("fbref_player_id"),
+        "posicion_fbref": row.get("position") or None,
         "titular": bool(row.get("titular", False)),
         "presiones": None,
         "presiones_exitosas": None,
@@ -224,6 +225,7 @@ def _merge_keeper(jugadores: list[dict], row: dict) -> None:
     jugadores.append({
         "nombre": row.get("player"),
         "fbref_player_id": pid,
+        "posicion_fbref": "GK",
         "titular": True,
         "minutos_jugados": _num(row.get("minutes"), int),
         "stats_extra_json": extra or None,
