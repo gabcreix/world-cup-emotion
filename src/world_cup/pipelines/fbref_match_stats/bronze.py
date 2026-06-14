@@ -13,6 +13,7 @@ Reutiliza el driver/caché de world_cup.pipelines.fbref_squads.bronze.
 """
 
 from pathlib import Path
+import time
 
 from world_cup import db
 from world_cup.pipelines.fbref_squads.bronze import _create_driver, _get_or_cache
@@ -23,6 +24,9 @@ from world_cup.pipelines.fbref_squads.bronze import _create_driver, _get_or_cach
 
 ROOT = Path(__file__).resolve().parents[4]
 BRONZE_DIR = ROOT / "data" / "bronze" / "fbref_match_stats"
+
+MAX_REINTENTOS = 3
+RETRY_DELAY = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +91,20 @@ def run() -> list[int]:
     try:
         for partido_id, match_report_url in pendientes:
             cache_path = BRONZE_DIR / f"{partido_id}.html"
-            html = _get_or_cache(driver, match_report_url, cache_path)
 
-            if "Just a moment" in html or "challenge-platform" in html:
-                print(f"  [WARN] partido {partido_id}: HTML inválido (Cloudflare), omitiendo")
+            for intento in range(1, MAX_REINTENTOS + 1):
+                html = _get_or_cache(driver, match_report_url, cache_path)
+                if "Just a moment" not in html and "challenge-platform" not in html:
+                    break
+
+                print(f"  [WARN] partido {partido_id}: HTML inválido (Cloudflare), "
+                      f"intento {intento}/{MAX_REINTENTOS}")
+                if cache_path.exists():
+                    cache_path.unlink()
+                if intento < MAX_REINTENTOS:
+                    time.sleep(RETRY_DELAY)
+            else:
+                print(f"  [WARN] partido {partido_id}: omitiendo tras {MAX_REINTENTOS} intentos")
                 continue
 
             _persist(partido_id, match_report_url, html)
