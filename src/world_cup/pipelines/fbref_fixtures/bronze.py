@@ -9,6 +9,7 @@ Reutiliza el driver/caché de world_cup.pipelines.fbref_squads.bronze.
 
 import json
 import re
+import time
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Comment
@@ -16,8 +17,10 @@ from bs4 import BeautifulSoup, Comment
 from world_cup import db
 from world_cup.pipelines.fbref_squads.bronze import (
     BASE_URL,
+    REQUEST_DELAY,
     TOURNAMENT_URL,
     _create_driver,
+    _fetch_html,
     _get_or_cache,
 )
 
@@ -50,8 +53,23 @@ def discover_schedule_url(driver) -> str | None:
 
 
 def fetch_schedule_html(driver, schedule_url: str) -> str:
+    """Descarga siempre el calendario en vivo (no se cachea de forma
+    permanente): cambia continuamente con resultados y enlaces a match
+    reports a medida que avanza el torneo."""
     cache_path = BRONZE_DIR / "schedule.html"
-    return _get_or_cache(driver, schedule_url, cache_path)
+    time.sleep(REQUEST_DELAY)
+    html = _fetch_html(driver, schedule_url)
+
+    if "Just a moment" in html or "challenge-platform" in html:
+        print("  [WARN] Cloudflare al descargar el calendario")
+        if cache_path.exists():
+            print(f"  [cache] {cache_path.name} (fallback)")
+            return cache_path.read_text(encoding="utf-8", errors="ignore")
+        return html
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(html, encoding="utf-8")
+    return html
 
 
 # ---------------------------------------------------------------------------
